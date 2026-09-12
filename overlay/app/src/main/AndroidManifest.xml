@@ -19,8 +19,17 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name="pl.whisperfiles.SubtitleEditorActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <service
             android:name="pl.whisperfiles.TranscriptionService"
+            android:exported="false" />
+
+        <service
+            android:name="pl.whisperfiles.SubtitleBurnService"
             android:exported="false" />
     </application>
 </manifest>

@@ -3,15 +3,20 @@ plugins {
 }
 
 android {
-  compileSdkVersion 31
-  buildToolsVersion '30.0.3'
+  namespace "pl.whisperfiles"
+  compileSdkVersion 36
+
+  lint {
+    // v0.3 intentionally keeps targetSdk at 31 for the current Android behavior.
+    disable 'ExpiredTargetSdkVersion'
+  }
 
   defaultConfig {
     applicationId "pl.whisperfiles"
     minSdkVersion 26
     targetSdkVersion 31
-    versionCode 1
-    versionName "0.1.0"
+    versionCode 3
+    versionName "0.3.0"
 
     externalNativeBuild {
       cmake {
@@ -54,4 +59,8 @@ android {
 }
 
 dependencies {
+  implementation "androidx.media3:media3-transformer:1.11.0"
+  implementation "androidx.media3:media3-effect:1.11.0"
+  implementation "androidx.media3:media3-common:1.11.0"
+  testImplementation "junit:junit:4.13.2"
 }

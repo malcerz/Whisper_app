@@ -68,6 +68,7 @@ Java_com_whispercpp_java_whisper_WhisperLib_fullTranscribe(
     params.offset_ms = 0;
     params.no_context = true;
     params.single_segment = false;
+    params.token_timestamps = true;
     params.abort_callback = abort_callback;
     params.abort_callback_user_data = NULL;
 
@@ -108,6 +109,52 @@ Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentT1(
         JNIEnv * env, jclass clazz, jlong context_ptr, jint index) {
     (void) env; (void) clazz;
     return (jlong) whisper_full_get_segment_t1((struct whisper_context *) context_ptr, index);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentTokenCount(
+        JNIEnv * env, jclass clazz, jlong context_ptr, jint segment_index) {
+    (void) env; (void) clazz;
+    if (context_ptr == 0) return 0;
+    return whisper_full_n_tokens((struct whisper_context *) context_ptr, segment_index);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentToken(
+        JNIEnv * env, jclass clazz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void) clazz;
+    if (context_ptr == 0) return (*env)->NewStringUTF(env, "");
+    const char * text = whisper_full_get_token_text(
+            (struct whisper_context *) context_ptr, segment_index, token_index);
+    return (*env)->NewStringUTF(env, text == NULL ? "" : text);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentTokenT0(
+        JNIEnv * env, jclass clazz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void) env; (void) clazz;
+    if (context_ptr == 0) return -1;
+    return (jlong) whisper_full_get_token_t0(
+            (struct whisper_context *) context_ptr, segment_index, token_index);
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_whispercpp_java_whisper_WhisperLib_getTextSegmentTokenT1(
+        JNIEnv * env, jclass clazz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void) env; (void) clazz;
+    if (context_ptr == 0) return -1;
+    return (jlong) whisper_full_get_token_t1(
+            (struct whisper_context *) context_ptr, segment_index, token_index);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_whispercpp_java_whisper_WhisperLib_isTextSegmentToken(
+        JNIEnv * env, jclass clazz, jlong context_ptr, jint segment_index, jint token_index) {
+    (void) env; (void) clazz;
+    if (context_ptr == 0) return JNI_FALSE;
+    struct whisper_context * ctx = (struct whisper_context *) context_ptr;
+    whisper_token token = whisper_full_get_token_id(ctx, segment_index, token_index);
+    return token < whisper_token_eot(ctx) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jstring JNICALL

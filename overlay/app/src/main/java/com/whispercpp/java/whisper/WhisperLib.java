@@ -14,6 +14,11 @@ public final class WhisperLib {
     public static native String getTextSegment(long contextPtr, int index);
     public static native long getTextSegmentT0(long contextPtr, int index);
     public static native long getTextSegmentT1(long contextPtr, int index);
+    public static native int getTextSegmentTokenCount(long contextPtr, int segmentIndex);
+    public static native String getTextSegmentToken(long contextPtr, int segmentIndex, int tokenIndex);
+    public static native long getTextSegmentTokenT0(long contextPtr, int segmentIndex, int tokenIndex);
+    public static native long getTextSegmentTokenT1(long contextPtr, int segmentIndex, int tokenIndex);
+    public static native boolean isTextSegmentToken(long contextPtr, int segmentIndex, int tokenIndex);
     public static native void setAbortRequested(boolean requested);
     public static native String getSystemInfo();
 }

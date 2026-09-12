@@ -13,6 +13,8 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.PowerManager;
+
+import androidx.media3.common.util.UnstableApi;
 import android.provider.OpenableColumns;
 
 import com.whispercpp.java.whisper.WhisperContext;
@@ -25,11 +27,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@UnstableApi
 public final class TranscriptionService extends Service {
     static final String ACTION_START = "pl.whisperfiles.START";
     static final String EXTRA_MEDIA_URI = "media_uri";
@@ -39,6 +44,7 @@ public final class TranscriptionService extends Service {
     private static final String CHANNEL_ID = "whisper_transcription";
     private static final String PREFS = "whisper_files";
     private static final String PREF_CACHED_MODEL_URI = "cached_model_uri";
+    private static final String PREF_LAST_TRANSCRIPT_MEDIA_URI = "last_transcript_media_uri";
 
     public interface Listener {
         void onState(Snapshot snapshot);
@@ -110,6 +116,9 @@ public final class TranscriptionService extends Service {
         status = "Uruchamianie…";
         synchronized (preview) { preview.setLength(0); }
         cancelled.set(false);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_LAST_TRANSCRIPT_MEDIA_URI).apply();
+        File wordsFile = SubtitleTimelineStore.file(this);
+        if (wordsFile.exists()) wordsFile.delete();
 
         startForeground(NOTIFICATION_ID, buildNotification("Uruchamianie…", 0, true));
         publish();
@@ -140,6 +149,15 @@ public final class TranscriptionService extends Service {
         publish();
     }
 
+
+    public static boolean hasTranscriptFor(android.content.Context context, Uri mediaUri) {
+        if (context == null || mediaUri == null) return false;
+        String stored = context.getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(PREF_LAST_TRANSCRIPT_MEDIA_URI, "");
+        File srt = new File(context.getFilesDir(), "last_transcript.srt");
+        return mediaUri.toString().equals(stored) && srt.isFile() && srt.length() > 0;
+    }
+
     public File getTxtResultFile() { return new File(getFilesDir(), "last_transcript.txt"); }
     public File getSrtResultFile() { return new File(getFilesDir(), "last_transcript.srt"); }
 
@@ -165,6 +183,8 @@ public final class TranscriptionService extends Service {
 
                 activeContext = whisper;
                 final int[] srtIndex = {1};
+                final long[] lastSrtEndMs = {0L};
+                final ArrayList<SubtitleWord> allWords = new ArrayList<>();
 
                 AudioTranscriber.transcribe(
                         getContentResolver(), mediaUri, whisper, cancelled,
@@ -177,31 +197,44 @@ public final class TranscriptionService extends Service {
                             }
 
                             @Override
-                            public void onSegment(long startMs, long endMs, String text) throws IOException {
+                            public void onSegment(long startMs, long endMs, String text, List<SubtitleWord> words) throws IOException {
+                                if (words != null) allWords.addAll(words);
                                 txt.write(text);
                                 txt.newLine();
                                 txt.flush();
 
-                                srt.write(Integer.toString(srtIndex[0]++));
-                                srt.newLine();
-                                srt.write(formatSrtTime(startMs) + " --> " + formatSrtTime(endMs));
-                                srt.newLine();
-                                srt.write(text);
-                                srt.newLine();
-                                srt.newLine();
+                                List<SubtitleCue> cues = SubtitleFormatter.format(startMs, endMs, text);
+                                for (SubtitleCue cue : cues) {
+                                    long cueStart = Math.max(cue.startMs, lastSrtEndMs[0]);
+                                    long cueEnd = cue.endMs;
+                                    if (cueEnd <= cueStart + 80L) continue;
+                                    srt.write(Integer.toString(srtIndex[0]++));
+                                    srt.newLine();
+                                    srt.write(formatSrtTime(cueStart) + " --> " + formatSrtTime(cueEnd));
+                                    srt.newLine();
+                                    srt.write(cue.text);
+                                    srt.newLine();
+                                    srt.newLine();
+                                    lastSrtEndMs[0] = cueEnd;
+                                }
                                 srt.flush();
 
                                 appendPreview(text);
                                 publish();
                             }
                         });
+                if (!cancelled.get() && !allWords.isEmpty()) {
+                    SubtitleTimelineStore.write(this, allWords);
+                }
             } finally {
                 activeContext = null;
             }
 
             if (cancelled.get()) throw new CancelledException();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(PREF_LAST_TRANSCRIPT_MEDIA_URI, mediaUri.toString()).apply();
             progress = 100;
-            status = "Gotowe";
+            status = "Gotowe — transkrypcja i czasy słów utworzone";
             finished = true;
             running = false;
             publish();

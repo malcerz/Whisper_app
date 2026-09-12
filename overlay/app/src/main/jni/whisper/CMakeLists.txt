@@ -16,7 +16,9 @@ FetchContent_MakeAvailable(ggml)
 
 add_library(whisper SHARED ${SOURCE_FILES})
 target_link_libraries(whisper ${LOG_LIB} android ggml)
-target_compile_definitions(whisper PUBLIC GGML_USE_CPU)
+# The standalone Android target bypasses whisper.cpp's top-level CMakeLists.txt,
+# so provide the version macro normally generated there.
+target_compile_definitions(whisper PUBLIC GGML_USE_CPU WHISPER_VERSION=\"1.9.3-dev\")
 target_compile_options(whisper PRIVATE -O3 -fvisibility=hidden -fvisibility-inlines-hidden -ffunction-sections -fdata-sections)
 
 if (${ANDROID_ABI} STREQUAL "arm64-v8a")

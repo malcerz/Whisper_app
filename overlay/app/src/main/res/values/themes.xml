@@ -1,0 +1,7 @@
+<resources>
+  <style name="Theme.Whisperandroidjava" parent="@android:style/Theme.Material.Light.NoActionBar">
+    <item name="android:colorAccent">@color/teal_700</item>
+    <item name="android:statusBarColor">@color/purple_700</item>
+    <item name="android:navigationBarColor">@color/black</item>
+  </style>
+</resources>

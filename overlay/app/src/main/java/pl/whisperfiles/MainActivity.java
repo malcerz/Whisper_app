@@ -12,56 +12,109 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.OpenableColumns;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import androidx.media3.common.util.UnstableApi;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 
-public final class MainActivity extends Activity implements TranscriptionService.Listener {
+@UnstableApi
+public final class MainActivity extends Activity implements
+        TranscriptionService.Listener, SubtitleBurnService.Listener {
     private static final int PICK_MEDIA = 1001;
     private static final int PICK_MODEL = 1002;
     private static final int SAVE_TXT = 1003;
     private static final int SAVE_SRT = 1004;
+    private static final int SAVE_MP4 = 1005;
+    private static final int EDIT_SUBTITLES = 1006;
+
     private static final String PREFS = "whisper_files_ui";
     private static final String PREF_MEDIA = "media_uri";
     private static final String PREF_MODEL = "model_uri";
+    private static final String PREF_SUB_SIZE = "subtitle_size";
+    private static final String PREF_SUB_POSITION = "subtitle_position";
+    private static final String PREF_SUB_BACKGROUND = "subtitle_background";
+    private static final String PREF_TRACK_WORD = "track_word";
+    private static final String PREF_WORD_SCALE = "word_scale_percent";
+    private static final String PREF_WORD_HIGHLIGHT = "word_highlight";
 
     private Uri mediaUri;
     private Uri modelUri;
-    private TranscriptionService service;
-    private boolean bound;
+
+    private TranscriptionService transcriptionService;
+    private SubtitleBurnService burnService;
+    private boolean transcriptionBound;
+    private boolean burnBound;
+    private boolean transcriptionRunning;
+    private boolean burnRunning;
 
     private TextView mediaLabel;
     private TextView modelLabel;
     private TextView statusLabel;
+    private TextView burnStatusLabel;
     private TextView preview;
     private ProgressBar progress;
+    private ProgressBar burnProgress;
     private Button startButton;
     private Button cancelButton;
     private Button saveTxtButton;
     private Button saveSrtButton;
+    private Button editSubtitlesButton;
+    private Button burnButton;
+    private Button cancelBurnButton;
+    private Button saveMp4Button;
+    private Spinner subtitleSize;
+    private Spinner subtitlePosition;
+    private CheckBox subtitleBackground;
+    private CheckBox trackWord;
+    private SeekBar wordScaleSeek;
+    private SeekBar wordHighlightSeek;
+    private TextView wordScaleLabel;
+    private TextView wordHighlightLabel;
 
-    private final ServiceConnection connection = new ServiceConnection() {
+    private final ServiceConnection transcriptionConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder binder) {
             TranscriptionService.LocalBinder local = (TranscriptionService.LocalBinder) binder;
-            service = local.getService();
-            bound = true;
-            service.setListener(MainActivity.this);
+            transcriptionService = local.getService();
+            transcriptionBound = true;
+            transcriptionService.setListener(MainActivity.this);
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
-            if (service != null) service.clearListener(MainActivity.this);
-            service = null;
-            bound = false;
+            if (transcriptionService != null) transcriptionService.clearListener(MainActivity.this);
+            transcriptionService = null;
+            transcriptionBound = false;
+        }
+    };
+
+    private final ServiceConnection burnConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder binder) {
+            SubtitleBurnService.LocalBinder local = (SubtitleBurnService.LocalBinder) binder;
+            burnService = local.getService();
+            burnBound = true;
+            burnService.setListener(MainActivity.this);
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            if (burnService != null) burnService.clearListener(MainActivity.this);
+            burnService = null;
+            burnBound = false;
         }
     };
 
@@ -71,21 +124,32 @@ public final class MainActivity extends Activity implements TranscriptionService
         buildUi();
         restoreSelections();
         updateSelectionLabels();
-        updateButtons(false);
+        updateButtons();
     }
 
     @Override
     protected void onStart() {
         super.onStart();
-        bindService(new Intent(this, TranscriptionService.class), connection, Context.BIND_AUTO_CREATE);
+        bindService(new Intent(this, TranscriptionService.class),
+                transcriptionConnection, Context.BIND_AUTO_CREATE);
+        bindService(new Intent(this, SubtitleBurnService.class),
+                burnConnection, Context.BIND_AUTO_CREATE);
     }
 
     @Override
     protected void onStop() {
-        if (bound && service != null) service.clearListener(this);
-        if (bound) unbindService(connection);
-        bound = false;
-        service = null;
+        if (transcriptionBound && transcriptionService != null) {
+            transcriptionService.clearListener(this);
+            unbindService(transcriptionConnection);
+        }
+        if (burnBound && burnService != null) {
+            burnService.clearListener(this);
+            unbindService(burnConnection);
+        }
+        transcriptionBound = false;
+        burnBound = false;
+        transcriptionService = null;
+        burnService = null;
         super.onStop();
     }
 
@@ -98,9 +162,8 @@ public final class MainActivity extends Activity implements TranscriptionService
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
 
-        TextView title = text("Whisper Files", 28, true);
-        root.addView(title);
-        TextView subtitle = text("Offline: WAV + MP4 → polska transkrypcja. Bez mikrofonu.", 15, false);
+        root.addView(text("Whisper Files", 28, true));
+        TextView subtitle = text("Offline: WAV + MP4 → transkrypcja PL + napisy do filmu.", 15, false);
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
 
@@ -118,13 +181,13 @@ public final class MainActivity extends Activity implements TranscriptionService
         modelLabel.setPadding(0, dp(5), 0, dp(14));
         root.addView(modelLabel);
 
-        startButton = button("Transkrybuj");
+        startButton = button("Transkrybuj i utwórz napisy");
         startButton.setOnClickListener(v -> startTranscription());
         root.addView(startButton);
 
-        cancelButton = button("Anuluj");
+        cancelButton = button("Anuluj transkrypcję");
         cancelButton.setOnClickListener(v -> {
-            if (service != null) service.cancel();
+            if (transcriptionService != null) transcriptionService.cancel();
         });
         root.addView(cancelButton);
 
@@ -141,13 +204,90 @@ public final class MainActivity extends Activity implements TranscriptionService
         saves.setOrientation(LinearLayout.HORIZONTAL);
         saveTxtButton = button("Zapisz TXT");
         saveSrtButton = button("Zapisz SRT");
-        saveTxtButton.setOnClickListener(v -> createOutput(false));
-        saveSrtButton.setOnClickListener(v -> createOutput(true));
-        saves.addView(saveTxtButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        saves.addView(saveSrtButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        saveTxtButton.setOnClickListener(v -> createTextOutput(false));
+        saveSrtButton.setOnClickListener(v -> createTextOutput(true));
+        saves.addView(saveTxtButton, weighted());
+        saves.addView(saveSrtButton, weighted());
         root.addView(saves);
 
-        TextView resultTitle = text("Podgląd wyniku", 18, true);
+        editSubtitlesButton = button("Edytuj napisy");
+        editSubtitlesButton.setOnClickListener(v -> openSubtitleEditor());
+        root.addView(editSubtitlesButton);
+
+        TextView videoTitle = text("Film z wypalonymi napisami", 19, true);
+        videoTitle.setPadding(0, dp(22), 0, dp(4));
+        root.addView(videoTitle);
+        TextView videoHint = text(
+                "Dla MP4 napisy są renderowane na stałe w obrazie. Audio pozostaje bez efektów.",
+                14, false);
+        videoHint.setPadding(0, 0, 0, dp(10));
+        root.addView(videoHint);
+
+        LinearLayout styleRow = new LinearLayout(this);
+        styleRow.setOrientation(LinearLayout.HORIZONTAL);
+        subtitleSize = spinner(new String[]{"Małe", "Średnie", "Duże"});
+        subtitlePosition = spinner(new String[]{"Dół", "Środek", "Góra"});
+        styleRow.addView(subtitleSize, weighted());
+        styleRow.addView(subtitlePosition, weighted());
+        root.addView(styleRow);
+
+        subtitleBackground = new CheckBox(this);
+        subtitleBackground.setText("Półprzezroczyste czarne tło pod napisami");
+        root.addView(subtitleBackground);
+
+        trackWord = new CheckBox(this);
+        trackWord.setText("Śledź aktualnie wypowiadane słowo");
+        root.addView(trackWord);
+
+        wordScaleLabel = text("Powiększenie aktywnego słowa", 14, false);
+        wordScaleLabel.setPadding(0, dp(8), 0, 0);
+        root.addView(wordScaleLabel);
+        wordScaleSeek = new SeekBar(this);
+        wordScaleSeek.setMax(40); // 100..140%
+        root.addView(wordScaleSeek);
+
+        wordHighlightLabel = text("Zaznaczenie aktywnego słowa", 14, false);
+        wordHighlightLabel.setPadding(0, dp(6), 0, 0);
+        root.addView(wordHighlightLabel);
+        wordHighlightSeek = new SeekBar(this);
+        wordHighlightSeek.setMax(100);
+        root.addView(wordHighlightSeek);
+
+        SeekBar.OnSeekBarChangeListener styleListener = new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateWordStyleLabels();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { saveSubtitleStyle(); }
+        };
+        wordScaleSeek.setOnSeekBarChangeListener(styleListener);
+        wordHighlightSeek.setOnSeekBarChangeListener(styleListener);
+        trackWord.setOnCheckedChangeListener((buttonView, isChecked) -> updateWordStyleLabels());
+
+        burnButton = button("Wypal napisy do MP4");
+        burnButton.setOnClickListener(v -> startBurn());
+        root.addView(burnButton);
+
+        cancelBurnButton = button("Anuluj eksport filmu");
+        cancelBurnButton.setOnClickListener(v -> {
+            if (burnService != null) burnService.cancel();
+        });
+        root.addView(cancelBurnButton);
+
+        burnStatusLabel = text("Eksport filmu: gotowy", 15, true);
+        burnStatusLabel.setPadding(0, dp(10), 0, dp(6));
+        root.addView(burnStatusLabel);
+
+        burnProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        burnProgress.setMax(100);
+        root.addView(burnProgress, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(24)));
+
+        saveMp4Button = button("Zapisz MP4 z napisami");
+        saveMp4Button.setOnClickListener(v -> createMp4Output());
+        root.addView(saveMp4Button);
+
+        TextView resultTitle = text("Podgląd transkrypcji", 18, true);
         resultTitle.setPadding(0, dp(18), 0, dp(6));
         root.addView(resultTitle);
         preview = text("", 15, false);
@@ -181,17 +321,66 @@ public final class MainActivity extends Activity implements TranscriptionService
             Toast.makeText(this, "Wybierz plik WAV/MP4 i model .bin", Toast.LENGTH_LONG).show();
             return;
         }
+        if (burnRunning) {
+            Toast.makeText(this, "Najpierw zakończ eksport filmu", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
         Intent i = new Intent(this, TranscriptionService.class);
         i.setAction(TranscriptionService.ACTION_START);
         i.putExtra(TranscriptionService.EXTRA_MEDIA_URI, mediaUri.toString());
         i.putExtra(TranscriptionService.EXTRA_MODEL_URI, modelUri.toString());
         startForegroundService(i);
+        transcriptionRunning = true;
         statusLabel.setText("Uruchamianie…");
-        updateButtons(true);
+        updateButtons();
     }
 
-    private void createOutput(boolean srt) {
+    private void startBurn() {
+        if (mediaUri == null || !isVideo(mediaUri)) {
+            Toast.makeText(this, "Wybierz film MP4", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!TranscriptionService.hasTranscriptFor(this, mediaUri)) {
+            Toast.makeText(this, "Najpierw wykonaj transkrypcję tego filmu", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (transcriptionRunning) return;
+
+        saveSubtitleStyle();
+        try {
+            SubtitleProject.regenerateOutputs(this, mediaUri,
+                    subtitleSize.getSelectedItemPosition(), effectiveWordScale());
+        } catch (Exception e) {
+            Toast.makeText(this, "Nie można przygotować napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        Intent i = new Intent(this, SubtitleBurnService.class);
+        i.setAction(SubtitleBurnService.ACTION_START);
+        i.putExtra(SubtitleBurnService.EXTRA_MEDIA_URI, mediaUri.toString());
+        i.putExtra(SubtitleBurnService.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
+        i.putExtra(SubtitleBurnService.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
+        i.putExtra(SubtitleBurnService.EXTRA_BACKGROUND, subtitleBackground.isChecked());
+        i.putExtra(SubtitleBurnService.EXTRA_TRACK_WORD, trackWord.isChecked());
+        i.putExtra(SubtitleBurnService.EXTRA_WORD_SCALE, currentWordScale());
+        i.putExtra(SubtitleBurnService.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
+        startForegroundService(i);
+        burnRunning = true;
+        burnStatusLabel.setText("Eksport filmu: uruchamianie…");
+        updateButtons();
+    }
+
+    private void createTextOutput(boolean srt) {
+        if (srt && mediaUri != null && isVideo(mediaUri)) {
+            try {
+                saveSubtitleStyle();
+                SubtitleProject.regenerateOutputs(this, mediaUri,
+                        subtitleSize.getSelectedItemPosition(), effectiveWordScale());
+            } catch (Exception e) {
+                Toast.makeText(this, "Nie można przeliczyć napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
         File source = new File(getFilesDir(), srt ? "last_transcript.srt" : "last_transcript.txt");
         if (!source.isFile() || source.length() == 0) {
             Toast.makeText(this, "Brak wyniku do zapisania", Toast.LENGTH_SHORT).show();
@@ -204,9 +393,33 @@ public final class MainActivity extends Activity implements TranscriptionService
         startActivityForResult(i, srt ? SAVE_SRT : SAVE_TXT);
     }
 
+    private void createMp4Output() {
+        File source = SubtitleBurnService.outputFile(this);
+        if (!SubtitleBurnService.hasRenderFor(this, mediaUri) || !source.isFile() || source.length() == 0) {
+            Toast.makeText(this, "Brak gotowego filmu z napisami", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("video/mp4");
+        i.putExtra(Intent.EXTRA_TITLE, defaultOutputName("_napisy.mp4"));
+        startActivityForResult(i, SAVE_MP4);
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == EDIT_SUBTITLES) {
+            if (resultCode == RESULT_OK) {
+                statusLabel.setText("Napisy poprawione i zapisane");
+                try {
+                    File edited = new File(getFilesDir(), "last_transcript.txt");
+                    if (edited.isFile()) preview.setText(readSmallText(edited));
+                } catch (Exception ignored) {}
+                updateButtons();
+            }
+            return;
+        }
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
 
@@ -221,7 +434,7 @@ public final class MainActivity extends Activity implements TranscriptionService
                 prefs.edit().putString(PREF_MODEL, uri.toString()).apply();
             }
             updateSelectionLabels();
-            updateButtons(service != null && service.snapshot().running);
+            updateButtons();
             return;
         }
 
@@ -229,11 +442,35 @@ public final class MainActivity extends Activity implements TranscriptionService
             File source = new File(getFilesDir(), requestCode == SAVE_SRT
                     ? "last_transcript.srt" : "last_transcript.txt");
             try {
-                copyFileToUri(source, uri);
+                copyFileToUri(source, uri, null);
                 Toast.makeText(this, "Zapisano", Toast.LENGTH_SHORT).show();
             } catch (IOException e) {
                 Toast.makeText(this, "Błąd zapisu: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
+            return;
+        }
+
+        if (requestCode == SAVE_MP4) {
+            File source = SubtitleBurnService.outputFile(this);
+            saveMp4Button.setEnabled(false);
+            burnStatusLabel.setText("Zapisywanie filmu…");
+            new Thread(() -> {
+                try {
+                    copyFileToUri(source, uri, percent -> runOnUiThread(() ->
+                            burnStatusLabel.setText("Zapisywanie filmu… " + percent + "%")));
+                    runOnUiThread(() -> {
+                        burnStatusLabel.setText("Film zapisany");
+                        Toast.makeText(this, "Zapisano MP4 z napisami", Toast.LENGTH_LONG).show();
+                        updateButtons();
+                    });
+                } catch (IOException e) {
+                    runOnUiThread(() -> {
+                        burnStatusLabel.setText("Błąd zapisu filmu");
+                        Toast.makeText(this, "Błąd zapisu: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        updateButtons();
+                    });
+                }
+            }, "WhisperFiles-save-mp4").start();
         }
     }
 
@@ -250,6 +487,70 @@ public final class MainActivity extends Activity implements TranscriptionService
         String model = prefs.getString(PREF_MODEL, null);
         if (media != null) mediaUri = Uri.parse(media);
         if (model != null) modelUri = Uri.parse(model);
+        subtitleSize.setSelection(prefs.getInt(PREF_SUB_SIZE, SubtitleBurnService.SIZE_MEDIUM));
+        subtitlePosition.setSelection(prefs.getInt(PREF_SUB_POSITION, SubtitleCanvasOverlay.POSITION_BOTTOM));
+        subtitleBackground.setChecked(prefs.getBoolean(PREF_SUB_BACKGROUND, false));
+        trackWord.setChecked(prefs.getBoolean(PREF_TRACK_WORD, true));
+        wordScaleSeek.setProgress(prefs.getInt(PREF_WORD_SCALE, 12));
+        wordHighlightSeek.setProgress(prefs.getInt(PREF_WORD_HIGHLIGHT, 55));
+        updateWordStyleLabels();
+    }
+
+    private void saveSubtitleStyle() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt(PREF_SUB_SIZE, subtitleSize.getSelectedItemPosition())
+                .putInt(PREF_SUB_POSITION, subtitlePosition.getSelectedItemPosition())
+                .putBoolean(PREF_SUB_BACKGROUND, subtitleBackground.isChecked())
+                .putBoolean(PREF_TRACK_WORD, trackWord.isChecked())
+                .putInt(PREF_WORD_SCALE, wordScaleSeek.getProgress())
+                .putInt(PREF_WORD_HIGHLIGHT, wordHighlightSeek.getProgress())
+                .apply();
+    }
+
+    private void openSubtitleEditor() {
+        if (mediaUri == null || !isVideo(mediaUri) ||
+                !TranscriptionService.hasTranscriptFor(this, mediaUri)) {
+            Toast.makeText(this, "Najpierw wykonaj transkrypcję filmu", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        saveSubtitleStyle();
+        Intent i = new Intent(this, SubtitleEditorActivity.class);
+        i.putExtra(SubtitleEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
+        i.putExtra(SubtitleEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
+        i.putExtra(SubtitleEditorActivity.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
+        i.putExtra(SubtitleEditorActivity.EXTRA_BACKGROUND, subtitleBackground.isChecked());
+        i.putExtra(SubtitleEditorActivity.EXTRA_TRACK_WORD, trackWord.isChecked());
+        i.putExtra(SubtitleEditorActivity.EXTRA_WORD_SCALE, currentWordScale());
+        i.putExtra(SubtitleEditorActivity.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
+        startActivityForResult(i, EDIT_SUBTITLES);
+    }
+
+    private float currentWordScale() {
+        return 1f + wordScaleSeek.getProgress() / 100f;
+    }
+
+    private float effectiveWordScale() {
+        return trackWord.isChecked() ? currentWordScale() : 1f;
+    }
+
+    private void updateWordStyleLabels() {
+        if (wordScaleLabel != null && wordScaleSeek != null) {
+            wordScaleLabel.setText("Powiększenie aktywnego słowa: " + (100 + wordScaleSeek.getProgress()) + "%");
+        }
+        if (wordHighlightLabel != null && wordHighlightSeek != null) {
+            wordHighlightLabel.setText("Zaznaczenie aktywnego słowa: " + wordHighlightSeek.getProgress() + "%");
+        }
+        if (wordScaleSeek != null && trackWord != null) wordScaleSeek.setEnabled(!burnRunning && trackWord.isChecked());
+        if (wordHighlightSeek != null && trackWord != null) wordHighlightSeek.setEnabled(!burnRunning && trackWord.isChecked());
+    }
+
+    private String readSmallText(File file) throws IOException {
+        byte[] data = new byte[(int) Math.min(file.length(), 30000L)];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int n = in.read(data);
+            if (n <= 0) return "";
+            return new String(data, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+        }
     }
 
     private void updateSelectionLabels() {
@@ -265,42 +566,91 @@ public final class MainActivity extends Activity implements TranscriptionService
         return uri.getLastPathSegment() == null ? uri.toString() : uri.getLastPathSegment();
     }
 
-    private String defaultOutputName(String extension) {
+    private boolean isVideo(Uri uri) {
+        if (uri == null) return false;
+        String type = getContentResolver().getType(uri);
+        if (type != null && type.startsWith("video/")) return true;
+        String name = displayName(uri).toLowerCase();
+        return name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".mov");
+    }
+
+    private String defaultOutputName(String suffix) {
         String name = mediaUri == null ? "transkrypcja" : displayName(mediaUri);
         int dot = name.lastIndexOf('.');
         if (dot > 0) name = name.substring(0, dot);
-        return name + extension;
+        return name + suffix;
     }
 
-    private void copyFileToUri(File source, Uri target) throws IOException {
+    private interface CopyProgress { void onProgress(int percent); }
+
+    private void copyFileToUri(File source, Uri target, CopyProgress progressCallback) throws IOException {
+        long total = Math.max(1L, source.length());
+        long done = 0L;
+        int lastPercent = -1;
         try (FileInputStream in = new FileInputStream(source);
              OutputStream out = getContentResolver().openOutputStream(target, "wt")) {
             if (out == null) throw new IOException("Nie można otworzyć pliku docelowego");
-            byte[] buf = new byte[64 * 1024];
+            byte[] buf = new byte[1024 * 1024];
             int n;
-            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+            while ((n = in.read(buf)) >= 0) {
+                out.write(buf, 0, n);
+                done += n;
+                if (progressCallback != null) {
+                    int percent = (int) Math.min(100L, done * 100L / total);
+                    if (percent != lastPercent && (percent == 100 || percent - lastPercent >= 2)) {
+                        lastPercent = percent;
+                        progressCallback.onProgress(percent);
+                    }
+                }
+            }
         }
     }
 
     @Override
     public void onState(TranscriptionService.Snapshot snapshot) {
         runOnUiThread(() -> {
+            transcriptionRunning = snapshot.running;
             String status = snapshot.status;
             if (snapshot.error != null && !snapshot.error.isEmpty()) status += ": " + snapshot.error;
             statusLabel.setText(status + (snapshot.running ? "  " + snapshot.progress + "%" : ""));
             progress.setProgress(snapshot.progress);
             preview.setText(snapshot.preview == null ? "" : snapshot.preview);
-            updateButtons(snapshot.running);
+            updateButtons();
         });
     }
 
-    private void updateButtons(boolean running) {
-        startButton.setEnabled(!running && mediaUri != null && modelUri != null);
-        cancelButton.setEnabled(running);
+    @Override
+    public void onBurnState(SubtitleBurnService.Snapshot snapshot) {
+        runOnUiThread(() -> {
+            burnRunning = snapshot.running;
+            String status = snapshot.status;
+            if (snapshot.error != null && !snapshot.error.isEmpty()) status += ": " + snapshot.error;
+            burnStatusLabel.setText("Eksport filmu: " + status);
+            burnProgress.setProgress(snapshot.progress);
+            updateButtons();
+        });
+    }
+
+    private void updateButtons() {
+        startButton.setEnabled(!transcriptionRunning && !burnRunning && mediaUri != null && modelUri != null);
+        cancelButton.setEnabled(transcriptionRunning);
+
         File txt = new File(getFilesDir(), "last_transcript.txt");
         File srt = new File(getFilesDir(), "last_transcript.srt");
-        saveTxtButton.setEnabled(!running && txt.isFile() && txt.length() > 0);
-        saveSrtButton.setEnabled(!running && srt.isFile() && srt.length() > 0);
+        saveTxtButton.setEnabled(!transcriptionRunning && txt.isFile() && txt.length() > 0);
+        saveSrtButton.setEnabled(!transcriptionRunning && srt.isFile() && srt.length() > 0);
+
+        boolean transcriptMatches = TranscriptionService.hasTranscriptFor(this, mediaUri);
+        editSubtitlesButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
+        burnButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
+        cancelBurnButton.setEnabled(burnRunning);
+        subtitleSize.setEnabled(!burnRunning);
+        subtitlePosition.setEnabled(!burnRunning);
+        subtitleBackground.setEnabled(!burnRunning);
+        trackWord.setEnabled(!burnRunning);
+        wordScaleSeek.setEnabled(!burnRunning && trackWord.isChecked());
+        wordHighlightSeek.setEnabled(!burnRunning && trackWord.isChecked());
+        saveMp4Button.setEnabled(!burnRunning && SubtitleBurnService.hasRenderFor(this, mediaUri));
     }
 
     private TextView text(String value, int sp, boolean bold) {
@@ -316,6 +666,19 @@ public final class MainActivity extends Activity implements TranscriptionService
         b.setText(value);
         b.setAllCaps(false);
         return b;
+    }
+
+    private Spinner spinner(String[] values) {
+        Spinner s = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this, android.R.layout.simple_spinner_item, values);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(adapter);
+        return s;
+    }
+
+    private LinearLayout.LayoutParams weighted() {
+        return new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
     }
 
     private int dp(int value) {

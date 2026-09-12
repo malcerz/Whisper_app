@@ -1,63 +1,119 @@
-# Whisper Files Android v0.1
+# Whisper Files Android v0.3
 
-Minimalna aplikacja Android oparta na oficjalnym `ggml-org/whisper.cpp`.
+Aplikacja Android oparta na oficjalnym `ggml-org/whisper.cpp`.
 
-Przypięty commit bazowy:
+Przypięta baza Whisper:
 
 `52a939a2a762224e255d366c1182b2af4dd1a032` (master, 2026-09-04)
 
-## Zakres v0.1
+## Najważniejsze funkcje
 
-- brak nagrywania mikrofonem i brak `RECORD_AUDIO`,
-- wejście: WAV oraz MP4 z dowolną ścieżką audio obsługiwaną przez Android `MediaExtractor`/`MediaCodec`,
-- GoPro MP4/AAC jest obsługiwane natywnie, bez FFmpeg,
-- dekodowanie strumieniowe,
-- konwersja do mono 16 kHz float,
-- Whisper w blokach 30 s z 2 s nakładką,
-- język transkrypcji: polski (`pl`),
-- anulowanie także wewnątrz aktualnego wywołania `whisper_full()` przez native abort callback,
-- foreground service + partial wake lock: transkrypcja może działać po wygaszeniu ekranu,
-- postęp względem czasu ścieżki audio,
-- wyniki TXT i SRT zapisywane po każdym segmencie,
-- podgląd w UI jest ograniczony do ostatnich ~30 tys. znaków, ale pliki wynikowe nie mają tego limitu,
-- wybór modelu `.bin` przez Android Storage Access Framework; model jest kopiowany raz do prywatnego cache aplikacji.
+- transkrypcja WAV i MP4 offline,
+- polski Whisper (`.bin`, model wielojęzyczny),
+- długie pliki są obrabiane porcjami, bez wczytywania całego nagrania do RAM,
+- TXT + SRT,
+- ręczna edycja napisów po transkrypcji,
+- wypalanie napisów na stałe do MP4 przez AndroidX Media3 Transformer,
+- brak FFmpeg w APK,
+- render jako foreground service z postępem i anulowaniem.
 
-## Model
+## Nowości v0.3
 
-Potrzebny jest wielojęzyczny model `whisper.cpp`, np.:
+### Edycja napisów
 
-- `ggml-base.bin` — dobry pierwszy wybór,
-- model quantized base/small — mniejszy RAM / plik,
-- `ggml-small.bin` — lepsza jakość, ale dużo większy RAM i wolniejsza praca.
+Po transkrypcji MP4 dostępny jest przycisk `Edytuj napisy`.
 
-Nie używaj `*.en.bin` do polskiego.
+Edytor pokazuje jeden napis naraz, pozwala przechodzić `Poprzedni / Następny` i ręcznie poprawiać błędy rozpoznawania. Podgląd nad polem edycji jest liczony tym samym silnikiem układu, który jest używany podczas końcowego renderu MP4. Dzięki temu liczba słów w wierszu i podział na 1/2 linie odpowiadają finalnemu filmowi.
+
+Jeśli poprawka zmienia liczbę słów, czasy nowych słów są interpolowane w obrębie czasu poprawianego napisu. Jeśli liczba słów się nie zmienia, zachowywane są dotychczasowe czasy słów.
+
+### Bezpieczny układ dla pionowego filmu
+
+Napisy nie są już dzielone według sztywnej liczby znaków. `SubtitleLayoutEngine` mierzy tekst w pikselach przy faktycznej rozdzielczości filmu i wybranym rozmiarze fontu.
+
+- używane jest maksymalnie **84% szerokości obrazu**, czyli około 8% bezpiecznego marginesu z każdej strony,
+- maksymalnie 2 linie,
+- dla pionowego filmu pojedynczy napis jest celowo krótszy: do około 2,5 s i zwykle maks. 6 słów,
+- dla poziomego filmu limit jest luźniejszy,
+- układ uwzględnia także maksymalne powiększenie aktywnego słowa,
+- wyjątkowo długie pojedyncze słowo jest dodatkowo skalowane, aby nie wyjść poza bezpieczny obszar.
+
+### Śledzenie wypowiadanego słowa
+
+JNI włącza `token_timestamps` w `whisper.cpp`. Aplikacja zapisuje osobną oś czasu słów (`last_words.tsv`) i podczas renderowania zna czas początku i końca każdego słowa.
+
+Aktualnie wypowiadane słowo może być:
+
+- lekko powiększone,
+- wyróżnione kolorem,
+- śledzenie można całkowicie wyłączyć.
+
+W głównym ekranie są dwa suwaki:
+
+- `Powiększenie aktywnego słowa`: 100–140%,
+- `Zaznaczenie aktywnego słowa`: 0–100%.
+
+Domyślnie: 112% powiększenia i 55% zaznaczenia.
+
+Dla starych transkrypcji z v0.2, które nie mają osi słów, v0.3 potrafi utworzyć przybliżone czasy słów z istniejącego SRT. Najdokładniejsze śledzenie słów wymaga nowej transkrypcji wykonanej przez v0.3.
+
+## Przepływ pracy
+
+1. Wybierz WAV albo MP4.
+2. Wybierz model `whisper.cpp` `.bin`.
+3. Kliknij `Transkrybuj i utwórz napisy`.
+4. Dla MP4 ustaw rozmiar/pozycję napisów, tło i parametry śledzenia słowa.
+5. Kliknij `Edytuj napisy` i popraw błędy transkrypcji.
+6. `Zapisz SRT` generuje SRT ponownie według bieżącego układu filmu.
+7. Kliknij `Wypal napisy do MP4`.
+8. Po renderze kliknij `Zapisz MP4 z napisami`.
+
+## Architektura renderowania
+
+Nie jest używany FFmpeg. Aplikacja korzysta z AndroidX Media3 Transformer 1.11.0:
+
+- `Transformer` — dekodowanie/enkodowanie i muxowanie,
+- `OverlayEffect` — nakładka,
+- `CanvasOverlay` — dynamiczny overlay zależny od czasu,
+- `SubtitleLayoutEngine` — dokładne dzielenie napisów według szerokości w pikselach,
+- `SubtitlePainter` — identyczne rysowanie w edytorze i finalnym MP4,
+- systemowe `MediaCodec`/GPU — pipeline wideo.
+
+Obraz musi być ponownie zakodowany, ponieważ napisy są wypalane w piksele. Audio nie ma efektów i Media3 może je przepuścić bez ponownego kodowania, gdy format na to pozwala.
+
+## Model Whisper
+
+Do polskiego używaj modelu wielojęzycznego, bez `.en`.
+
+Na Snapdragonie 8s Gen 3 sensownym wyborem jest `ggml-large-v3-turbo-q8_0.bin`. Można także użyć `large-v3-q5_0` albo pełnego `large-v3`, kosztem większego RAM i czasu.
+
+Model jest wybierany przez Storage Access Framework i kopiowany raz do prywatnego cache aplikacji.
 
 ## Build Windows
 
-Wymagania:
+Wymagane:
 
 - Git,
 - JDK 17,
 - Android SDK,
-- Android NDK `25.2.9519653`,
-- dostęp do internetu przy pierwszym pobraniu `whisper.cpp` i zależności Gradle.
+- NDK `25.2.9519653`.
 
-Uruchom w PowerShell:
+Skrypt korzysta z:
+
+- Android Gradle Plugin `8.10.1`,
+- Gradle `8.11.1`,
+- compileSdk `36`,
+- AndroidX Media3 `1.11.0`.
+
+Uruchom:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\build_windows.ps1
 ```
 
-Gotowy APK pojawi się jako:
+Wynik:
 
-`out\WhisperFiles-v0.1-arm64-release.apk`
+`out\WhisperFiles-v0.3-arm64-release.apk`
 
-APK jest przeznaczony dla `arm64-v8a` i podpisany debugowym kluczem Gradle, więc nadaje się do bezpośredniego sideloadu/testów.
-
-## Ograniczenia pierwszej wersji
-
-- WAV: obsługiwany jest PCM 8/16/24/32-bit oraz float, o ile systemowy `MediaExtractor` danego telefonu rozpoznaje plik.
-- MP4: działa przez systemowe kodeki Androida; AAC z GoPro jest głównym przypadkiem testowym.
-- 2-sekundowa nakładka ogranicza urywanie słów na granicy bloków; jest też prosta deduplikacja powtórzonych segmentów.
-- pełna transkrypcja nie jest trzymana w RAM, ale sam model Whisper oczywiście pozostaje w pamięci podczas pracy.
+APK jest dla `arm64-v8a`.

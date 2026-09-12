@@ -1,0 +1,13 @@
+Whisper Files v0.3
+- subtitle editor with previous/next navigation and live final-layout preview
+- edited text is saved back to the word timeline and SRT/TXT
+- subtitles are split by measured pixel width instead of a fixed character count
+- 84% safe horizontal area prevents text from leaving portrait video edges
+- portrait videos use shorter cues (up to ~2.5 s / 6 words) and max 2 lines
+- whisper.cpp token timestamps are enabled and stored as word-level timing
+- active spoken word can be highlighted and enlarged during burned-in subtitles
+- active-word enlargement adjustable from 100% to 140%
+- active-word highlight strength adjustable from 0% to 100%
+- active-word tracking can be disabled
+- editor and Media3 burn use the same SubtitleLayoutEngine and SubtitlePainter
+- legacy v0.2 SRT can be converted to an approximate word timeline without retranscription

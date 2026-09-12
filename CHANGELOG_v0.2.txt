@@ -1,0 +1,9 @@
+Whisper Files v0.2
+- hardcoded subtitles in MP4 via Media3 Transformer
+- subtitle cue formatting/splitting and two-line layout
+- white/bold text, black outline/shadow, optional translucent background
+- subtitle size and vertical position controls
+- foreground video export with progress and cancel
+- MP4 save workflow with copy progress
+- transcript/render source URI matching to prevent accidental mismatch
+- build system updated for Media3: compileSdk 36, AGP 8.10.1, Gradle 8.11.1

@@ -10,10 +10,12 @@ import android.os.ParcelFileDescriptor;
 
 import com.whispercpp.java.whisper.WhisperContext;
 import com.whispercpp.java.whisper.WhisperSegment;
+import com.whispercpp.java.whisper.WhisperWord;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -28,7 +30,7 @@ final class AudioTranscriber {
 
     interface Callback {
         void onProgress(int percent, String status);
-        void onSegment(long startMs, long endMs, String text) throws IOException;
+        void onSegment(long startMs, long endMs, String text, List<SubtitleWord> words) throws IOException;
     }
 
     private AudioTranscriber() {}
@@ -70,10 +72,21 @@ final class AudioTranscriber {
                         long localStartMs = segment.getStart() * 10L;
                         long localEndMs = segment.getEnd() * 10L;
                         if (!firstChunk && localEndMs <= OVERLAP_MS) continue;
+                        ArrayList<SubtitleWord> timedWords = new ArrayList<>();
+                        for (WhisperWord word : segment.getWords()) {
+                            long wordStart = word.getStart() * 10L;
+                            long wordEnd = word.getEnd() * 10L;
+                            if (!firstChunk && wordEnd <= OVERLAP_MS) continue;
+                            timedWords.add(new SubtitleWord(
+                                    chunkStartMs + wordStart,
+                                    chunkStartMs + wordEnd,
+                                    word.getText()));
+                        }
                         emitter.emit(
                                 chunkStartMs + localStartMs,
                                 chunkStartMs + localEndMs,
-                                segment.getText());
+                                segment.getText(),
+                                timedWords);
                     }
                 });
 
@@ -372,7 +385,7 @@ final class AudioTranscriber {
             this.callback = callback;
         }
 
-        void emit(long startMs, long endMs, String text) throws IOException {
+        void emit(long startMs, long endMs, String text, List<SubtitleWord> words) throws IOException {
             String clean = text == null ? "" : text.trim();
             if (clean.isEmpty()) return;
             String normalized = clean.toLowerCase(Locale.ROOT)
@@ -387,7 +400,18 @@ final class AudioTranscriber {
 
             long safeStart = Math.max(0L, startMs);
             long safeEnd = Math.max(safeStart + 10L, endMs);
-            callback.onSegment(safeStart, safeEnd, clean);
+            ArrayList<SubtitleWord> safeWords = new ArrayList<>();
+            if (words != null) {
+                for (SubtitleWord word : words) {
+                    if (word == null || word.text.isEmpty()) continue;
+                    if (lastEndMs > 0 && word.endMs <= lastEndMs - 120L) continue;
+                    safeWords.add(word);
+                }
+            }
+            if (safeWords.isEmpty()) {
+                safeWords.addAll(SubtitleTimelineStore.wordsFromText(clean, safeStart, safeEnd));
+            }
+            callback.onSegment(safeStart, safeEnd, clean, safeWords);
             lastNormalized = normalized;
             lastEndMs = Math.max(lastEndMs, safeEnd);
         }

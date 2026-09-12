@@ -1,0 +1,18 @@
+# Android / Gradle generated files
+.gradle/
+**/.gradle/
+build/
+**/build/
+out/
+local.properties
+
+# Locally downloaded upstream dependency
+whisper.cpp/
+
+# IDE metadata
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db

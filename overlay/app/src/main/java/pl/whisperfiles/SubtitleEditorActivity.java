@@ -8,12 +8,16 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.ui.PlayerView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,6 +54,16 @@ public final class SubtitleEditorActivity extends Activity {
     private EditText editor;
     private Button previous;
     private Button next;
+    private PlayerView playerView;
+    private ExoPlayer player;
+    private final Runnable previewTicker = new Runnable() {
+        @Override public void run() {
+            if (player != null && preview != null) {
+                preview.setPlaybackTimeMs(player.getCurrentPosition());
+                preview.postDelayed(this, 50L);
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,6 +98,7 @@ public final class SubtitleEditorActivity extends Activity {
         buildUi();
         rebuildCues(0L);
         showCue();
+        initializeVideoPlayer();
     }
 
     private void buildUi() {
@@ -103,8 +118,11 @@ public final class SubtitleEditorActivity extends Activity {
         hint.setPadding(0, dp(4), 0, dp(10));
         root.addView(hint);
 
-        preview = new SubtitlePreviewView(this);
-        root.addView(preview, new LinearLayout.LayoutParams(
+        FrameLayout videoPreview = (FrameLayout) getLayoutInflater().inflate(
+                R.layout.video_preview, root, false);
+        playerView = videoPreview.findViewById(R.id.videoPlayer);
+        preview = videoPreview.findViewById(R.id.videoSubtitleOverlay);
+        root.addView(videoPreview, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(390)));
 
         cueLabel = text("", 14, true);
@@ -195,6 +213,7 @@ public final class SubtitleEditorActivity extends Activity {
         cues = new ArrayList<>(SubtitleLayoutEngine.layout(
                 words, videoInfo.width, videoInfo.height,
                 SubtitleBurnService.relativeSize(size), effectiveScale()));
+        refreshVideoCues(cues);
         if (cues.isEmpty()) {
             cueIndex = 0;
             return;
@@ -227,8 +246,14 @@ public final class SubtitleEditorActivity extends Activity {
         cueLabel.setText(String.format(Locale.ROOT, "%d / %d   %s – %s",
                 cueIndex + 1, cues.size(), time(cue.startMs), time(cue.endMs)));
         finalLayout.setText(cue.text);
-        preview.setPreview(videoInfo, cue, position, SubtitleBurnService.relativeSize(size),
+        preview.setCues(videoInfo, cues, position, SubtitleBurnService.relativeSize(size),
                 background, trackWord, wordScale, highlight);
+        preview.setPlaybackTimeMs(previewTime(cue));
+        if (player != null) {
+            boolean wasPlaying = player.isPlaying();
+            player.seekTo(cue.startMs);
+            if (!wasPlaying) player.pause();
+        }
         previous.setEnabled(cueIndex > 0);
         next.setEnabled(cueIndex + 1 < cues.size());
     }
@@ -238,12 +263,15 @@ public final class SubtitleEditorActivity extends Activity {
         if (original == null) return;
         List<SubtitleWord> temporary = SubtitleTimelineStore.wordsFromText(
                 text, original.startMs, original.endMs);
+        List<SubtitleWord> previewWords = SubtitleTimelineStore.replaceRange(
+                words, original.sourceStartIndex, original.sourceEndIndex, text);
         List<SubtitleCue> laidOut = SubtitleLayoutEngine.layout(
                 temporary, videoInfo.width, videoInfo.height,
                 SubtitleBurnService.relativeSize(size), effectiveScale());
         if (laidOut.isEmpty()) {
             finalLayout.setText("");
-            preview.setPreview(videoInfo, null, position, SubtitleBurnService.relativeSize(size),
+            preview.setCues(videoInfo, new ArrayList<>(), position,
+                    SubtitleBurnService.relativeSize(size),
                     background, trackWord, wordScale, highlight);
             return;
         }
@@ -255,8 +283,39 @@ public final class SubtitleEditorActivity extends Activity {
             shown.append("\n\n→ po zapisie: ").append(laidOut.size()).append(" krótkie napisy");
             finalLayout.setText(shown);
         }
-        preview.setPreview(videoInfo, first, position, SubtitleBurnService.relativeSize(size),
+        List<SubtitleCue> previewCues = SubtitleLayoutEngine.layout(
+                previewWords, videoInfo.width, videoInfo.height,
+                SubtitleBurnService.relativeSize(size), effectiveScale());
+        preview.setCues(videoInfo, previewCues, position,
+                SubtitleBurnService.relativeSize(size),
                 background, trackWord, wordScale, highlight);
+    }
+
+    private void refreshVideoCues(List<SubtitleCue> updatedCues) {
+        if (preview == null) return;
+        preview.setCues(videoInfo, updatedCues, position,
+                SubtitleBurnService.relativeSize(size), background, trackWord,
+                wordScale, highlight);
+    }
+
+    private long previewTime(SubtitleCue cue) {
+        if (cue.words.isEmpty()) return (cue.startMs + cue.endMs) / 2L;
+        SubtitleWord word = cue.words.get(cue.words.size() / 2);
+        return (word.startMs + word.endMs) / 2L;
+    }
+
+    private void initializeVideoPlayer() {
+        player = new ExoPlayer.Builder(this).build();
+        playerView.setPlayer(player);
+        player.setMediaItem(MediaItem.fromUri(mediaUri));
+        player.prepare();
+        SubtitleCue cue = currentCue();
+        if (cue != null) {
+            player.seekTo(cue.startMs);
+            preview.setPlaybackTimeMs(cue.startMs);
+        }
+        preview.removeCallbacks(previewTicker);
+        preview.post(previewTicker);
     }
 
     private float effectiveScale() {
@@ -275,6 +334,16 @@ public final class SubtitleEditorActivity extends Activity {
             setResult(RESULT_OK);
             super.onBackPressed();
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (preview != null) preview.removeCallbacks(previewTicker);
+        if (player != null) {
+            player.release();
+            player = null;
+        }
+        super.onDestroy();
     }
 
     private static String time(long ms) {

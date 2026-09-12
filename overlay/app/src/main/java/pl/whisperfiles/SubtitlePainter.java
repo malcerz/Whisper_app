@@ -103,18 +103,43 @@ final class SubtitlePainter {
         float total = dynamicLineWidth(words, from, to, active, baseTextPx, activeScale);
         float x = centerX - total / 2f;
         float space = measure(" ", baseTextPx);
+        float activeCenter = 0f;
+        boolean hasActive = false;
+
+        // Draw the complete line at the normal size first. This keeps every word visible even
+        // when the highlighted word is enlarged or when the overlay is composited by Media3.
         for (int i = from; i <= to; i++) {
             boolean isActive = i == active;
-            float size = baseTextPx * (isActive ? activeScale : 1f);
+            String text = words.get(i).text;
+            float reservedWidth = measure(text, baseTextPx * (isActive ? activeScale : 1f));
+            fill.setTextSize(baseTextPx);
+            stroke.setTextSize(baseTextPx);
+            stroke.setStrokeWidth(Math.max(3f, baseTextPx * 0.075f));
+            fill.setColor(Color.WHITE);
+            canvas.drawText(text, x, baseline, stroke);
+            canvas.drawText(text, x, baseline, fill);
+            if (isActive) {
+                activeCenter = x + reservedWidth / 2f;
+                hasActive = true;
+            }
+            x += reservedWidth;
+            if (i < to) x += space;
+        }
+
+        // Overlay only the active word in the accent color, centered over its reserved slot.
+        if (hasActive) {
+            fill.setTextAlign(Paint.Align.CENTER);
+            stroke.setTextAlign(Paint.Align.CENTER);
+            String text = words.get(active).text;
+            float size = baseTextPx * activeScale;
             fill.setTextSize(size);
             stroke.setTextSize(size);
             stroke.setStrokeWidth(Math.max(3f, size * 0.075f));
-            fill.setColor(isActive ? activeColor(highlightStrength) : Color.WHITE);
-            String text = words.get(i).text;
-            canvas.drawText(text, x, baseline, stroke);
-            canvas.drawText(text, x, baseline, fill);
-            x += fill.measureText(text);
-            if (i < to) x += space;
+            fill.setColor(activeColor(highlightStrength));
+            canvas.drawText(text, activeCenter, baseline, stroke);
+            canvas.drawText(text, activeCenter, baseline, fill);
+            fill.setTextAlign(Paint.Align.LEFT);
+            stroke.setTextAlign(Paint.Align.LEFT);
         }
     }
 

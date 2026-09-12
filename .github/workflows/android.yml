@@ -8,36 +8,76 @@ on:
 permissions:
   contents: read
 
+env:
+  WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
+  ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: overlay
-
     steps:
-      - name: Pobierz źródła
-        uses: actions/checkout@v4
+      - name: Checkout repozytorium
+        uses: actions/checkout@v6
 
       - name: Ustaw Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
+
+      - name: Ustaw Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+            ndk;25.2.9519653
+            cmake;3.22.1
 
       - name: Skonfiguruj Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
-      - name: Nadaj uprawnienie do uruchomienia Gradle Wrappera
-        run: chmod +x gradlew
+      - name: Pobierz przypięte źródła whisper.cpp
+        shell: bash
+        run: |
+          git clone https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          git -C whisper.cpp checkout --detach "$WHISPER_COMMIT"
 
-      - name: Zbuduj debug APK
-        run: ./gradlew assembleDebug
+      - name: Nałóż overlay aplikacji i konfigurację Gradle
+        shell: bash
+        run: |
+          rm -rf "$ANDROID_PROJECT/app/src/main/java"
+          mkdir -p "$ANDROID_PROJECT/app/src/main/java"
+          cp -a overlay/app/. "$ANDROID_PROJECT/app/"
+          cp root-patches/build.gradle "$ANDROID_PROJECT/build.gradle"
+          cp root-patches/gradle.properties "$ANDROID_PROJECT/gradle.properties"
+          cp root-patches/gradle-wrapper.properties \
+            "$ANDROID_PROJECT/gradle/wrapper/gradle-wrapper.properties"
+          SDK_DIR="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          test -n "$SDK_DIR"
+          printf 'sdk.dir=%s\n' "$SDK_DIR" > "$ANDROID_PROJECT/local.properties"
+          chmod +x "$ANDROID_PROJECT/gradlew"
+
+      - name: Testy, lint i kompilacja APK
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT }}
+        run: |
+          ./gradlew --no-daemon clean test lint :app:assembleDebug :app:assembleRelease
+
+      - name: Przygotuj artefakty APK
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk" \
+            out/WhisperFiles-v0.3-arm64-debug.apk
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk" \
+            out/WhisperFiles-v0.3-arm64-release.apk
 
       - name: Zapisz APK jako artefakt
         uses: actions/upload-artifact@v4
         with:
-          name: Whisper-app-debug
-          path: overlay/app/build/outputs/apk/debug/*.apk
+          name: WhisperFiles-v0.3-arm64
+          path: out/*.apk
           if-no-files-found: error

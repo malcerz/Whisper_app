@@ -1,0 +1,43 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: overlay
+
+    steps:
+      - name: Pobierz źródła
+        uses: actions/checkout@v4
+
+      - name: Ustaw Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Skonfiguruj Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Nadaj uprawnienie do uruchomienia Gradle Wrappera
+        run: chmod +x gradlew
+
+      - name: Zbuduj debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Zapisz APK jako artefakt
+        uses: actions/upload-artifact@v4
+        with:
+          name: Whisper-app-debug
+          path: overlay/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

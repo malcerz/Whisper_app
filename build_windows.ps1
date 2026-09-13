@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $PinnedCommit = "52a939a2a762224e255d366c1182b2af4dd1a032"
-$Version = "0.5.1"
+$Version = "0.5.2"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Whisper = Join-Path $Root "whisper.cpp"
 $AndroidProject = Join-Path $Whisper "examples\whisper.android.java"

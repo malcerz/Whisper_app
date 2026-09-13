@@ -10,7 +10,7 @@ permissions:
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
-  APP_VERSION: v0.5.1
+  APP_VERSION: v0.5.2
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:

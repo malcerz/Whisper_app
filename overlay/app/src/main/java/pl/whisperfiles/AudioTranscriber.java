@@ -54,6 +54,12 @@ final class AudioTranscriber {
 
                 extractor.selectTrack(audioTrack);
                 MediaFormat inputFormat = extractor.getTrackFormat(audioTrack);
+                // Keep the audio track aligned to the MP4 presentation timeline. Most
+                // files start audio at 0, but some containers have a positive track PTS.
+                // Sample-count-only timing would make every subtitle early by that offset.
+                long firstAudioSampleUs = extractor.getSampleTime();
+                final long mediaTimelineOffsetMs = firstAudioSampleUs > 0L
+                        ? firstAudioSampleUs / 1000L : 0L;
                 String mime = inputFormat.getString(MediaFormat.KEY_MIME);
                 if (mime == null || !mime.startsWith("audio/")) {
                     throw new IOException("Nieprawidłowy format ścieżki audio");
@@ -75,7 +81,8 @@ final class AudioTranscriber {
                             audio, "pl", startSample, totalSamples, progressListener);
                     if (cancelled.get()) return;
                     callback.onProgress(startSample + audio.length, totalSamples, "Transkrypcja…");
-                    long chunkStartMs = startSample * 1000L / TARGET_RATE;
+                    long chunkStartMs = mediaTimelineOffsetMs
+                            + startSample * 1000L / TARGET_RATE;
                     for (WhisperSegment segment : segments) {
                         long localStartMs = segment.getStart() * 10L;
                         long localEndMs = segment.getEnd() * 10L;

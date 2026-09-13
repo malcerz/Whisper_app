@@ -1,0 +1,9 @@
+Whisper Files v0.5.2
+- fixed the real cause of subtitles starting at 00:00 when speech begins later
+- enabled whisper.cpp built-in Silero VAD v6.2.0 for every transcription chunk
+- bundled the ~0.88 MB VAD model inside the APK; no separate VAD download is required
+- Whisper segment/token timestamps remain mapped to the original input timeline after VAD trimming
+- first detected VAD speech start is used as a hard lower bound for the first segment/word timestamps
+- preserved positive MP4 audio-track presentation timestamp offset, preventing systematic early subtitles in files whose audio track starts after video time 0
+- kept token timestamps for karaoke/word highlighting
+- VAD parameters tuned for subtitles: threshold 0.50, min speech 120 ms, min silence 180 ms, speech pad 30 ms

@@ -10,18 +10,24 @@ public final class WhisperContext implements AutoCloseable {
 
     private static volatile ProgressListener progressListener;
     private long ptr;
+    private final String vadModelPath;
 
-    private WhisperContext(long ptr) {
+    private WhisperContext(long ptr, String vadModelPath) {
         this.ptr = ptr;
+        this.vadModelPath = vadModelPath;
     }
 
     public static WhisperContext create(String modelPath) {
+        return create(modelPath, null);
+    }
+
+    public static WhisperContext create(String modelPath, String vadModelPath) {
         long ptr = WhisperLib.initContext(modelPath);
         if (ptr == 0L) {
             throw new IllegalStateException("Nie można wczytać modelu: " + modelPath);
         }
         WhisperLib.setAbortRequested(false);
-        return new WhisperContext(ptr);
+        return new WhisperContext(ptr, vadModelPath);
     }
 
     public List<WhisperSegment> transcribe(float[] audio, String language) {
@@ -37,19 +43,25 @@ public final class WhisperContext implements AutoCloseable {
         int rc;
         try {
             rc = WhisperLib.fullTranscribe(ptr, threads, audio,
-                    language == null ? "pl" : language, chunkStartSamples, totalSamples);
+                    language == null ? "pl" : language, vadModelPath,
+                    chunkStartSamples, totalSamples);
         } finally {
             progressListener = null;
         }
         if (rc != 0) return new ArrayList<>();
 
         int count = WhisperLib.getTextSegmentCount(ptr);
+        int vadCount = WhisperLib.getVadSegmentCount(ptr);
+        long firstSpeechStart = vadCount > 0 ? WhisperLib.getVadSegmentT0(ptr, 0) : -1L;
+
         ArrayList<WhisperSegment> out = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             long segmentStart = WhisperLib.getTextSegmentT0(ptr, i);
             long segmentEnd = WhisperLib.getTextSegmentT1(ptr, i);
+            long timingFloor = i == 0 && firstSpeechStart >= 0L ? firstSpeechStart : -1L;
+            if (timingFloor >= 0L) segmentStart = Math.max(segmentStart, timingFloor);
             String segmentText = WhisperLib.getTextSegment(ptr, i);
-            List<WhisperWord> words = readWords(i, segmentStart, segmentEnd, segmentText);
+            List<WhisperWord> words = readWords(i, segmentStart, segmentEnd, segmentText, timingFloor);
             out.add(new WhisperSegment(segmentStart, segmentEnd, segmentText, words));
         }
         return out;
@@ -60,7 +72,7 @@ public final class WhisperContext implements AutoCloseable {
         if (listener != null) listener.onProgress(processedSamples, totalSamples);
     }
 
-    private List<WhisperWord> readWords(int segmentIndex, long segmentStart, long segmentEnd, String segmentText) {
+    private List<WhisperWord> readWords(int segmentIndex, long segmentStart, long segmentEnd, String segmentText, long timingFloor) {
         ArrayList<WhisperWord> words = new ArrayList<>();
         int tokenCount = WhisperLib.getTextSegmentTokenCount(ptr, segmentIndex);
         StringBuilder current = new StringBuilder();
@@ -81,6 +93,10 @@ public final class WhisperContext implements AutoCloseable {
                     t0 = segmentStart;
                     t1 = Math.max(segmentStart + 1L, segmentEnd);
                 }
+            }
+            if (timingFloor >= 0L) {
+                t0 = Math.max(t0, timingFloor);
+                t1 = Math.max(t1, t0 + 1L);
             }
 
             boolean startsWithSpace = Character.isWhitespace(raw.charAt(0));

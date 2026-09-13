@@ -48,7 +48,9 @@ public final class TranscriptionService extends Service {
     private static final String PREFS = "whisper_files";
     private static final String PREF_CACHED_MODEL_URI = "cached_model_uri";
     private static final String PREF_LAST_TRANSCRIPT_MEDIA_URI = "last_transcript_media_uri";
-    private static final String COMPUTE_BACKEND = "CPU (NPU nieaktywne)";
+    private static final String VAD_ASSET = "ggml-silero-v6.2.0.bin";
+    private static final String VAD_CACHE = "ggml-silero-v6.2.0.bin";
+    private static final String COMPUTE_BACKEND = "CPU (NPU nieaktywne) + Silero VAD";
 
     public interface Listener {
         void onState(Snapshot snapshot);
@@ -225,11 +227,13 @@ public final class TranscriptionService extends Service {
 
             publishProgress(2, "Przygotowanie wejścia…");
             File modelFile = ensureModelCached(modelUri);
+            File vadModelFile = ensureVadModelCached();
             if (cancelled.get()) throw new CancelledException();
 
-            publishProgress(11, "Ładowanie modelu…");
+            publishProgress(11, "Ładowanie modelu + VAD…");
 
-            try (WhisperContext whisper = WhisperContext.create(modelFile.getAbsolutePath());
+            try (WhisperContext whisper = WhisperContext.create(
+                    modelFile.getAbsolutePath(), vadModelFile.getAbsolutePath());
                  BufferedWriter txt = new BufferedWriter(new OutputStreamWriter(
                          new FileOutputStream(getTxtResultFile(), false), StandardCharsets.UTF_8));
                  BufferedWriter srt = new BufferedWriter(new OutputStreamWriter(
@@ -387,6 +391,45 @@ public final class TranscriptionService extends Service {
         if (!temp.renameTo(model)) throw new IOException("Nie można zapisać cache modelu");
         prefs.edit().putString(PREF_CACHED_MODEL_URI, modelUri.toString()).apply();
         return model;
+    }
+
+    private File ensureVadModelCached() throws IOException {
+        File modelDir = new File(getFilesDir(), "models");
+        if (!modelDir.isDirectory() && !modelDir.mkdirs()) {
+            throw new IOException("Nie można utworzyć katalogu modelu VAD");
+        }
+        File vadFile = new File(modelDir, VAD_CACHE);
+        if (vadFile.isFile() && vadFile.length() > 128 * 1024L) {
+            return vadFile;
+        }
+
+        File temp = new File(modelDir, VAD_CACHE + ".tmp");
+        if (temp.exists()) temp.delete();
+
+        try (InputStream in = getAssets().open(VAD_ASSET);
+             FileOutputStream out = new FileOutputStream(temp)) {
+            byte[] buffer = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buffer)) >= 0) {
+                if (cancelled.get()) throw new IOException("Anulowano kopiowanie modelu VAD");
+                out.write(buffer, 0, n);
+            }
+            out.getFD().sync();
+        } catch (Throwable t) {
+            temp.delete();
+            if (t instanceof IOException) throw (IOException) t;
+            throw new IOException("Nie można przygotować modelu VAD", t);
+        }
+
+        if (vadFile.exists() && !vadFile.delete()) {
+            temp.delete();
+            throw new IOException("Nie można zastąpić modelu VAD");
+        }
+        if (!temp.renameTo(vadFile)) {
+            temp.delete();
+            throw new IOException("Nie można zapisać modelu VAD");
+        }
+        return vadFile;
     }
 
     private static long querySize(ContentResolver resolver, Uri uri) {

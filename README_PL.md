@@ -142,3 +142,15 @@ Wynik:
 `out\Whisper_app-v0.5.0-arm64-release.apk` (oraz `...-debug.apk`)
 
 APK jest dla `arm64-v8a`.
+
+## Poprawka v0.5.2: prawdziwy początek mowy (VAD)
+
+Poprzednie wersje próbowały brać początek pierwszego słowa z token timestamps Whispera. To nie rozwiązuje przypadku, gdy pierwszy segment/token jest oznaczony od 00:00 mimo 1–3 s ciszy na początku.
+
+v0.5.2 włącza wbudowany w whisper.cpp **Silero VAD v6.2.0**. VAD najpierw wykrywa faktyczne fragmenty mowy, a whisper.cpp mapuje timestampy segmentów i tokenów z powrotem na oryginalną oś czasu pliku. Pierwszy wykryty moment mowy jest dodatkowo używany jako twarda dolna granica timestampu pierwszego segmentu/słowa.
+
+Model VAD (~0.88 MB) jest dołączony do APK jako `ggml-silero-v6.2.0.bin`; użytkownik nie musi go wybierać ani pobierać osobno.
+
+Dodatkowo zachowywany jest dodatni PTS początku ścieżki audio z MP4. Jeśli sama ścieżka audio zaczyna się np. 300 ms po początku obrazu, napisy dostają również ten offset.
+
+Parametry VAD: threshold 0.50, min speech 120 ms, min silence 180 ms, speech pad 30 ms. Dzięki temu krótkie polskie słowa nie są łatwo gubione, a napisy nie powinny startować od ciszy.

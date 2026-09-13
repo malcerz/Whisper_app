@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -15,6 +16,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.ui.PlayerView;
@@ -118,10 +121,22 @@ public final class SubtitleEditorActivity extends Activity {
         hint.setPadding(0, dp(4), 0, dp(10));
         root.addView(hint);
 
-        FrameLayout videoPreview = (FrameLayout) getLayoutInflater().inflate(
-                R.layout.video_preview, root, false);
-        playerView = videoPreview.findViewById(R.id.videoPlayer);
-        preview = videoPreview.findViewById(R.id.videoSubtitleOverlay);
+        FrameLayout videoPreview = new FrameLayout(this);
+        videoPreview.setBackgroundColor(android.graphics.Color.rgb(20, 20, 20));
+        try {
+            getLayoutInflater().inflate(R.layout.video_preview, videoPreview, true);
+            playerView = videoPreview.findViewById(R.id.videoPlayer);
+            preview = videoPreview.findViewById(R.id.videoSubtitleOverlay);
+        } catch (RuntimeException e) {
+            // A device-specific Media3 view failure must not make subtitle editing
+            // unusable. Keep the subtitle canvas available as a safe fallback.
+            playerView = null;
+            videoPreview.removeAllViews();
+            preview = new SubtitlePreviewView(this);
+            videoPreview.addView(preview, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+        }
         root.addView(videoPreview, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(390)));
 
@@ -305,17 +320,48 @@ public final class SubtitleEditorActivity extends Activity {
     }
 
     private void initializeVideoPlayer() {
-        player = new ExoPlayer.Builder(this).build();
-        playerView.setPlayer(player);
-        player.setMediaItem(MediaItem.fromUri(mediaUri));
-        player.prepare();
-        SubtitleCue cue = currentCue();
-        if (cue != null) {
-            player.seekTo(cue.startMs);
-            preview.setPlaybackTimeMs(cue.startMs);
+        if (playerView == null || preview == null || mediaUri == null) return;
+        preview.post(() -> {
+            if (isFinishing() || isDestroyed() || player != null) return;
+            ExoPlayer candidate = null;
+            try {
+                candidate = new ExoPlayer.Builder(getApplicationContext()).build();
+                candidate.addListener(new Player.Listener() {
+                    @Override public void onPlayerError(PlaybackException error) {
+                        disableVideoPlayer();
+                    }
+                });
+                player = candidate;
+                playerView.setPlayer(candidate);
+                candidate.setMediaItem(MediaItem.fromUri(mediaUri));
+                candidate.prepare();
+                SubtitleCue cue = currentCue();
+                if (cue != null) {
+                    candidate.seekTo(cue.startMs);
+                    preview.setPlaybackTimeMs(cue.startMs);
+                }
+                preview.removeCallbacks(previewTicker);
+                preview.post(previewTicker);
+            } catch (RuntimeException e) {
+                if (candidate != null) {
+                    try { candidate.release(); } catch (RuntimeException ignored) {}
+                }
+                player = null;
+                disableVideoPlayer();
+            }
+        });
+    }
+
+    private void disableVideoPlayer() {
+        if (preview != null) preview.removeCallbacks(previewTicker);
+        if (playerView != null) {
+            try { playerView.setPlayer(null); } catch (RuntimeException ignored) {}
+            playerView.setVisibility(View.GONE);
         }
-        preview.removeCallbacks(previewTicker);
-        preview.post(previewTicker);
+        if (player != null) {
+            try { player.release(); } catch (RuntimeException ignored) {}
+            player = null;
+        }
     }
 
     private float effectiveScale() {

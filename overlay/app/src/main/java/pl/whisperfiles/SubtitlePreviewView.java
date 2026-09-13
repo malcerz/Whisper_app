@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.View;
 
 import androidx.media3.common.util.UnstableApi;
@@ -13,6 +14,7 @@ import java.util.List;
 
 @UnstableApi
 public final class SubtitlePreviewView extends View {
+    private static final String TAG = "SubtitlePreview";
     private final SubtitlePainter painter = new SubtitlePainter();
     private VideoInfo videoInfo = new VideoInfo(1080, 1920);
     private SubtitleCue cue;
@@ -79,26 +81,32 @@ public final class SubtitlePreviewView extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        SubtitleCue visibleCue = cues.isEmpty() ? cue : cueAt(previewTimeMs);
-        if (visibleCue == null) return;
-        float sx = getWidth() / (float) videoInfo.width;
-        float sy = getHeight() / (float) videoInfo.height;
-        float scale = Math.min(sx, sy);
-        float drawW = videoInfo.width * scale;
-        float drawH = videoInfo.height * scale;
-        float dx = (getWidth() - drawW) / 2f;
-        float dy = (getHeight() - drawH) / 2f;
-        canvas.save();
-        canvas.translate(dx, dy);
-        canvas.scale(scale, scale);
-        painter.draw(canvas, visibleCue, previewTimeMs, videoInfo.width, videoInfo.height, position,
-                SubtitleLayoutEngine.textSizePx(videoInfo.height, relativeSize), background,
-                trackWord, activeScale, highlightStrength);
-        canvas.restore();
+        int saveCount = canvas.save();
+        try {
+            SubtitleCue visibleCue = cues.isEmpty() ? cue : cueAt(previewTimeMs);
+            if (visibleCue == null) return;
+            float sx = getWidth() / (float) videoInfo.width;
+            float sy = getHeight() / (float) videoInfo.height;
+            float scale = Math.min(sx, sy);
+            float drawW = videoInfo.width * scale;
+            float drawH = videoInfo.height * scale;
+            float dx = (getWidth() - drawW) / 2f;
+            float dy = (getHeight() - drawH) / 2f;
+            canvas.translate(dx, dy);
+            canvas.scale(scale, scale);
+            painter.draw(canvas, visibleCue, previewTimeMs, videoInfo.width, videoInfo.height, position,
+                    SubtitleLayoutEngine.textSizePx(videoInfo.height, relativeSize), background,
+                    trackWord, activeScale, highlightStrength);
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Subtitle preview rendering failed", e);
+        } finally {
+            canvas.restoreToCount(saveCount);
+        }
     }
 
     private SubtitleCue cueAt(long timeMs) {
         for (SubtitleCue item : cues) {
+            if (item == null) continue;
             if (timeMs >= item.startMs && timeMs < item.endMs) return item;
         }
         return null;

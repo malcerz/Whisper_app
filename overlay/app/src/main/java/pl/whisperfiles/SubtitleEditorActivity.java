@@ -5,6 +5,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -29,6 +30,7 @@ import java.util.Locale;
 
 @UnstableApi
 public final class SubtitleEditorActivity extends Activity {
+    private static final String TAG = "SubtitleEditor";
     static final String EXTRA_MEDIA_URI = "media_uri";
     static final String EXTRA_SIZE = "subtitle_size";
     static final String EXTRA_POSITION = "subtitle_position";
@@ -51,6 +53,7 @@ public final class SubtitleEditorActivity extends Activity {
     private int cueIndex;
     private boolean bindingText;
     private boolean dirty;
+    private boolean textOnlyFallback;
 
     private SubtitlePreviewView preview;
     private TextView cueLabel;
@@ -62,9 +65,14 @@ public final class SubtitleEditorActivity extends Activity {
     private ExoPlayer player;
     private final Runnable previewTicker = new Runnable() {
         @Override public void run() {
-            if (player != null && preview != null) {
-                preview.setPlaybackTimeMs(player.getCurrentPosition());
-                preview.postDelayed(this, 50L);
+            try {
+                if (player != null && preview != null) {
+                    preview.setPlaybackTimeMs(player.getCurrentPosition());
+                    preview.postDelayed(this, 50L);
+                }
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Video preview update failed", e);
+                disableVideoPlayer();
             }
         }
     };
@@ -99,10 +107,66 @@ public final class SubtitleEditorActivity extends Activity {
             return;
         }
 
-        buildUi();
-        rebuildCues(0L);
-        showCue();
-        initializeVideoPlayer();
+        try {
+            buildUi();
+            rebuildCues(0L);
+            showCue();
+            initializeVideoPlayer();
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Full subtitle editor initialization failed", e);
+            Toast.makeText(this, "Podgląd jest niedostępny — uruchamiam edycję tekstową",
+                    Toast.LENGTH_LONG).show();
+            buildTextOnlyEditor();
+        }
+    }
+
+    private void buildTextOnlyEditor() {
+        textOnlyFallback = true;
+        playerView = null;
+        preview = null;
+
+        int pad = dp(14);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(pad, pad, pad, pad);
+        scroll.addView(root, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+
+        root.addView(text("Edycja napisów — tryb tekstowy", 22, true));
+        TextView hint = text("Podgląd filmu został wyłączony, ale tekst można poprawić i zapisać.",
+                14, false);
+        hint.setPadding(0, dp(6), 0, dp(12));
+        root.addView(hint);
+
+        editor = new EditText(this);
+        editor.setTextSize(18);
+        editor.setMinLines(12);
+        editor.setGravity(Gravity.TOP | Gravity.START);
+        editor.setSingleLine(false);
+        editor.setText(allWordsText());
+        root.addView(editor, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        Button save = button("Zapisz poprawki");
+        save.setOnClickListener(v -> {
+            if (commitCurrent()) {
+                Toast.makeText(this, "Napisy zapisane", Toast.LENGTH_SHORT).show();
+                setResult(RESULT_OK);
+            }
+        });
+        root.addView(save);
+        setContentView(scroll);
+    }
+
+    private String allWordsText() {
+        StringBuilder out = new StringBuilder();
+        for (SubtitleWord word : words) {
+            if (word == null || word.text.isEmpty()) continue;
+            if (out.length() > 0) out.append(' ');
+            out.append(word.text);
+        }
+        return out.toString();
     }
 
     private void buildUi() {
@@ -133,6 +197,7 @@ public final class SubtitleEditorActivity extends Activity {
             if (playerView != null && playerView.getSubtitleView() != null) {
                 playerView.getSubtitleView().setVisibility(View.GONE);
             }
+            if (preview == null) throw new IllegalStateException("Missing subtitle preview");
         } catch (RuntimeException e) {
             // A device-specific Media3 view failure must not make subtitle editing
             // unusable. Keep the subtitle canvas available as a safe fallback.
@@ -172,7 +237,12 @@ public final class SubtitleEditorActivity extends Activity {
             @Override public void afterTextChanged(Editable s) {
                 if (bindingText) return;
                 dirty = true;
-                updateLivePreview(s.toString());
+                try {
+                    updateLivePreview(s.toString());
+                } catch (RuntimeException ignored) {
+                    // Keep text editing usable even if a malformed cue cannot be laid out.
+                    finalLayout.setText(s.toString());
+                }
             }
         });
         root.addView(editor, new LinearLayout.LayoutParams(
@@ -211,20 +281,35 @@ public final class SubtitleEditorActivity extends Activity {
     }
 
     private boolean commitCurrent() {
+        if (textOnlyFallback) return commitTextOnly();
         SubtitleCue cue = currentCue();
         if (cue == null) return true;
-        if (dirty) {
-            String text = editor.getText().toString();
-            long anchor = cue.startMs;
-            words = SubtitleTimelineStore.replaceRange(
-                    words, cue.sourceStartIndex, cue.sourceEndIndex, text);
-            rebuildCues(anchor);
-            dirty = false;
-        }
         try {
+            if (dirty) {
+                String text = editor.getText().toString();
+                long anchor = cue.startMs;
+                words = SubtitleTimelineStore.replaceRange(
+                        words, cue.sourceStartIndex, cue.sourceEndIndex, text);
+                rebuildCues(anchor);
+                dirty = false;
+            }
             SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, size, effectiveScale());
             return true;
         } catch (Exception e) {
+            Toast.makeText(this, "Błąd zapisu napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            return false;
+        }
+    }
+
+    private boolean commitTextOnly() {
+        if (words.isEmpty()) return true;
+        try {
+            words = SubtitleTimelineStore.replaceRange(
+                    words, 0, words.size() - 1, editor.getText().toString());
+            SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, size, effectiveScale());
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Text-only subtitle save failed", e);
             Toast.makeText(this, "Błąd zapisu napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
             return false;
         }
@@ -353,6 +438,7 @@ public final class SubtitleEditorActivity extends Activity {
                 preview.removeCallbacks(previewTicker);
                 preview.post(previewTicker);
             } catch (RuntimeException e) {
+                Log.e(TAG, "Video preview initialization failed", e);
                 if (candidate != null) {
                     try { candidate.release(); } catch (RuntimeException ignored) {}
                 }
@@ -394,11 +480,7 @@ public final class SubtitleEditorActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (preview != null) preview.removeCallbacks(previewTicker);
-        if (player != null) {
-            player.release();
-            player = null;
-        }
+        disableVideoPlayer();
         super.onDestroy();
     }
 

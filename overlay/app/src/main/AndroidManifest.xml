@@ -24,6 +24,11 @@
             android:exported="false"
             android:screenOrientation="portrait" />
 
+        <activity
+            android:name="pl.whisperfiles.TranscriptEditorActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <service
             android:name="pl.whisperfiles.TranscriptionService"
             android:exported="false" />

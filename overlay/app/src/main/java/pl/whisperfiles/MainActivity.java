@@ -39,7 +39,8 @@ public final class MainActivity extends Activity implements
     private static final int SAVE_TXT = 1003;
     private static final int SAVE_SRT = 1004;
     private static final int SAVE_MP4 = 1005;
-    private static final int EDIT_SUBTITLES = 1006;
+    private static final int EDIT_TRANSCRIPT = 1006;
+    private static final int EDIT_SUBTITLES = 1007;
 
     private static final String PREFS = "whisper_files_ui";
     private static final String PREF_MEDIA = "media_uri";
@@ -72,6 +73,7 @@ public final class MainActivity extends Activity implements
     private Button cancelButton;
     private Button saveTxtButton;
     private Button saveSrtButton;
+    private Button editTranscriptButton;
     private Button editSubtitlesButton;
     private Button burnButton;
     private Button cancelBurnButton;
@@ -211,7 +213,11 @@ public final class MainActivity extends Activity implements
         saves.addView(saveSrtButton, weighted());
         root.addView(saves);
 
-        editSubtitlesButton = button("Edytuj napisy");
+        editTranscriptButton = button("Edytuj transkrypcję");
+        editTranscriptButton.setOnClickListener(v -> openTranscriptEditor());
+        root.addView(editTranscriptButton);
+
+        editSubtitlesButton = button("Podgląd i edycja napisów filmu");
         editSubtitlesButton.setOnClickListener(v -> openSubtitleEditor());
         root.addView(editSubtitlesButton);
 
@@ -410,9 +416,11 @@ public final class MainActivity extends Activity implements
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == EDIT_SUBTITLES) {
+        if (requestCode == EDIT_TRANSCRIPT || requestCode == EDIT_SUBTITLES) {
             if (resultCode == RESULT_OK) {
-                statusLabel.setText("Napisy poprawione i zapisane");
+                statusLabel.setText(requestCode == EDIT_TRANSCRIPT
+                        ? "Transkrypcja poprawiona i zapisana"
+                        : "Napisy poprawione i zapisane");
                 try {
                     File edited = new File(getFilesDir(), "last_transcript.txt");
                     if (edited.isFile()) preview.setText(readSmallText(edited));
@@ -514,16 +522,37 @@ public final class MainActivity extends Activity implements
             Toast.makeText(this, "Najpierw wykonaj transkrypcję filmu", Toast.LENGTH_SHORT).show();
             return;
         }
-        saveSubtitleStyle();
-        Intent i = new Intent(this, SubtitleEditorActivity.class);
-        i.putExtra(SubtitleEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
-        i.putExtra(SubtitleEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
-        i.putExtra(SubtitleEditorActivity.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
-        i.putExtra(SubtitleEditorActivity.EXTRA_BACKGROUND, subtitleBackground.isChecked());
-        i.putExtra(SubtitleEditorActivity.EXTRA_TRACK_WORD, trackWord.isChecked());
-        i.putExtra(SubtitleEditorActivity.EXTRA_WORD_SCALE, currentWordScale());
-        i.putExtra(SubtitleEditorActivity.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
-        startActivityForResult(i, EDIT_SUBTITLES);
+        try {
+            saveSubtitleStyle();
+            Intent i = new Intent(this, SubtitleEditorActivity.class);
+            i.putExtra(SubtitleEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
+            i.putExtra(SubtitleEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
+            i.putExtra(SubtitleEditorActivity.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
+            i.putExtra(SubtitleEditorActivity.EXTRA_BACKGROUND, subtitleBackground.isChecked());
+            i.putExtra(SubtitleEditorActivity.EXTRA_TRACK_WORD, trackWord.isChecked());
+            i.putExtra(SubtitleEditorActivity.EXTRA_WORD_SCALE, currentWordScale());
+            i.putExtra(SubtitleEditorActivity.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
+            startActivityForResult(i, EDIT_SUBTITLES);
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Nie można otworzyć edytora napisów", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void openTranscriptEditor() {
+        if (mediaUri == null || !TranscriptionService.hasTranscriptFor(this, mediaUri)) {
+            Toast.makeText(this, "Najpierw wykonaj transkrypcję", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            saveSubtitleStyle();
+            Intent i = new Intent(this, TranscriptEditorActivity.class);
+            i.putExtra(TranscriptEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
+            i.putExtra(TranscriptEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
+            i.putExtra(TranscriptEditorActivity.EXTRA_WORD_SCALE, effectiveWordScale());
+            startActivityForResult(i, EDIT_TRANSCRIPT);
+        } catch (RuntimeException e) {
+            Toast.makeText(this, "Nie można otworzyć edycji transkrypcji", Toast.LENGTH_LONG).show();
+        }
     }
 
     private float currentWordScale() {
@@ -569,7 +598,12 @@ public final class MainActivity extends Activity implements
 
     private boolean isVideo(Uri uri) {
         if (uri == null) return false;
-        String type = getContentResolver().getType(uri);
+        String type;
+        try {
+            type = getContentResolver().getType(uri);
+        } catch (RuntimeException ignored) {
+            type = null;
+        }
         if (type != null && type.startsWith("video/")) return true;
         String name = displayName(uri).toLowerCase();
         return name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".mov");
@@ -677,6 +711,7 @@ public final class MainActivity extends Activity implements
         saveSrtButton.setEnabled(!transcriptionRunning && srt.isFile() && srt.length() > 0);
 
         boolean transcriptMatches = TranscriptionService.hasTranscriptFor(this, mediaUri);
+        editTranscriptButton.setEnabled(!transcriptionRunning && !burnRunning && transcriptMatches);
         editSubtitlesButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
         burnButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
         cancelBurnButton.setEnabled(burnRunning);

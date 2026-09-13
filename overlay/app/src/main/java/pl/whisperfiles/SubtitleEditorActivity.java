@@ -15,6 +15,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
@@ -127,6 +128,11 @@ public final class SubtitleEditorActivity extends Activity {
             getLayoutInflater().inflate(R.layout.video_preview, videoPreview, true);
             playerView = videoPreview.findViewById(R.id.videoPlayer);
             preview = videoPreview.findViewById(R.id.videoSubtitleOverlay);
+            // PlayerView has its own subtitle renderer. It must stay disabled because
+            // SubtitlePreviewView is the single source of karaoke subtitles.
+            if (playerView != null && playerView.getSubtitleView() != null) {
+                playerView.getSubtitleView().setVisibility(View.GONE);
+            }
         } catch (RuntimeException e) {
             // A device-specific Media3 view failure must not make subtitle editing
             // unusable. Keep the subtitle canvas available as a safe fallback.
@@ -326,6 +332,10 @@ public final class SubtitleEditorActivity extends Activity {
             ExoPlayer candidate = null;
             try {
                 candidate = new ExoPlayer.Builder(getApplicationContext()).build();
+                candidate.setTrackSelectionParameters(candidate.getTrackSelectionParameters()
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build());
                 candidate.addListener(new Player.Listener() {
                     @Override public void onPlayerError(PlaybackException error) {
                         disableVideoPlayer();

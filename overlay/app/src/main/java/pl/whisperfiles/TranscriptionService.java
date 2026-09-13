@@ -416,7 +416,9 @@ public final class TranscriptionService extends Service {
         long transcriptionElapsed = Math.max(1L,
                 SystemClock.elapsedRealtime() - transcriptionStartedAtMs);
         if (processedAudioMs > 0L) {
-            double instantRate = processedAudioMs / (transcriptionElapsed / 1000d);
+            // Both values are milliseconds. Dividing milliseconds by seconds would
+            // inflate the real-time factor by 1000.
+            double instantRate = processedAudioMs / (double) transcriptionElapsed;
             if (smoothedRealtimeFactor <= 0d) smoothedRealtimeFactor = instantRate;
             else smoothedRealtimeFactor = smoothedRealtimeFactor * 0.80d + instantRate * 0.20d;
             realtimeFactor = (float) smoothedRealtimeFactor;

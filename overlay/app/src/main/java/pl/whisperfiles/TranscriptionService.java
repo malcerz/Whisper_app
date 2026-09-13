@@ -240,6 +240,7 @@ public final class TranscriptionService extends Service {
                 publishProgress(15, "Transkrypcja…");
                 final int[] srtIndex = {1};
                 final long[] lastSrtEndMs = {0L};
+                final long[] firstSpeechMs = {-1L};
                 final ArrayList<SubtitleWord> allWords = new ArrayList<>();
 
                 AudioTranscriber.transcribe(
@@ -263,20 +264,17 @@ public final class TranscriptionService extends Service {
                                 txt.newLine();
                                 txt.flush();
 
-                                // Whisper segment timestamps may include leading silence.
-                                // The subtitle must begin with the first actually timed word,
-                                // otherwise the first cue can incorrectly start at 00:00.
-                                long subtitleStartMs = startMs;
-                                long subtitleEndMs = endMs;
-                                if (words != null && !words.isEmpty()) {
-                                    SubtitleWord firstWord = words.get(0);
-                                    SubtitleWord lastWord = words.get(words.size() - 1);
-                                    if (firstWord != null && lastWord != null &&
-                                            lastWord.endMs > firstWord.startMs) {
-                                        subtitleStartMs = firstWord.startMs;
-                                        subtitleEndMs = lastWord.endMs;
-                                    }
+                                // Segment timestamps may include leading silence. Anchor every
+                                // cue to timed words, especially the first cue of the file.
+                                long firstWordMs = SubtitleTiming.firstWordStartMs(words, startMs);
+                                long lastWordMs = SubtitleTiming.lastWordEndMs(words, endMs);
+                                boolean firstSpeechSegment = firstSpeechMs[0] < 0L;
+                                if (firstSpeechMs[0] < 0L && words != null && !words.isEmpty()) {
+                                    firstSpeechMs[0] = firstWordMs;
                                 }
+                                long subtitleStartMs = firstSpeechSegment && firstSpeechMs[0] >= 0L
+                                    ? firstSpeechMs[0] : firstWordMs;
+                                long subtitleEndMs = Math.max(lastWordMs, subtitleStartMs + 1L);
                                 List<SubtitleCue> cues = SubtitleFormatter.format(
                                         subtitleStartMs, subtitleEndMs, text);
                                 for (SubtitleCue cue : cues) {

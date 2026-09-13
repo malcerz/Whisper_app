@@ -17,6 +17,10 @@ Przypięta baza Whisper:
 - brak FFmpeg w APK,
 - render jako foreground service z postępem i anulowaniem.
 
+## Poprawka v0.5.1: początek napisów
+
+Pierwszy napis zaczyna się teraz dokładnie przy pierwszym słowie mowy. Aplikacja korzysta z czasu pierwszego poprawnego tokena/słowa Whispera, zamiast z początku segmentu, który może obejmować ciszę od `00:00`. Dzięki temu cisza przed rozpoczęciem mowy nie powoduje wyświetlania napisów zbyt wcześnie.
+
 ## Nowości v0.5
 
 ### Suwaki rozmiaru i położenia

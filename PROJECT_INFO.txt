@@ -1,8 +1,9 @@
-Whisper Files Android v0.5
+Whisper Files Android v0.5.1
 Base: ggml-org/whisper.cpp @ 52a939a2a762224e255d366c1182b2af4dd1a032
 Target: WAV + MP4 transcription, Polish, editable subtitles, word tracking, hard-burned subtitles in MP4.
 Subtitle layout: real pixel width, 84% safe area, max 2 lines, shorter portrait cues.
 Subtitle style: text size slider (2.0-10.0% of video height), vertical position slider (0-100% from top), selectable highlight colour for the spoken word.
+First subtitle timing: the first cue starts at the first valid timed word, not at the segment start or 0:00.
 Word timing: whisper.cpp token timestamps with fallback interpolation for legacy SRT/edited text.
 Video export: AndroidX Media3 Transformer 1.11.0 + CanvasOverlay + hardware MediaCodec pipeline.
 Android ABI: arm64-v8a

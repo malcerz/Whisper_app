@@ -1,0 +1,5 @@
+Whisper Files v0.5.1
+- first subtitle cue now starts at the first valid timed word from Whisper token timestamps
+- leading silence before speech no longer produces subtitles starting at 00:00
+- added unit tests for the first-word timestamp calculation
+- preview, SRT and burned MP4 continue to use the same word timeline

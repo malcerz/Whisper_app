@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import androidx.media3.common.util.UnstableApi;
 import android.provider.OpenableColumns;
@@ -47,6 +48,7 @@ public final class TranscriptionService extends Service {
     private static final String PREFS = "whisper_files";
     private static final String PREF_CACHED_MODEL_URI = "cached_model_uri";
     private static final String PREF_LAST_TRANSCRIPT_MEDIA_URI = "last_transcript_media_uri";
+    private static final String COMPUTE_BACKEND = "CPU (NPU nieaktywne)";
 
     public interface Listener {
         void onState(Snapshot snapshot);
@@ -59,14 +61,31 @@ public final class TranscriptionService extends Service {
         public final boolean running;
         public final boolean finished;
         public final String error;
+        public final float preciseProgress;
+        public final long elapsedMs;
+        public final long etaMs;
+        public final long processedAudioMs;
+        public final long totalAudioMs;
+        public final float realtimeFactor;
+        public final String computeBackend;
 
-        Snapshot(String status, int progress, String preview, boolean running, boolean finished, String error) {
+        Snapshot(String status, int progress, String preview, boolean running, boolean finished,
+                 String error, float preciseProgress, long elapsedMs, long etaMs,
+                 long processedAudioMs, long totalAudioMs, float realtimeFactor,
+                 String computeBackend) {
             this.status = status;
             this.progress = progress;
             this.preview = preview;
             this.running = running;
             this.finished = finished;
             this.error = error;
+            this.preciseProgress = preciseProgress;
+            this.elapsedMs = elapsedMs;
+            this.etaMs = etaMs;
+            this.processedAudioMs = processedAudioMs;
+            this.totalAudioMs = totalAudioMs;
+            this.realtimeFactor = realtimeFactor;
+            this.computeBackend = computeBackend;
         }
     }
 
@@ -85,11 +104,21 @@ public final class TranscriptionService extends Service {
     private volatile int progress;
     private volatile String status = "Gotowy";
     private volatile String error = "";
+    private volatile float preciseProgress;
+    private volatile long elapsedMs;
+    private volatile long etaMs = -1L;
+    private volatile long processedAudioMs;
+    private volatile long totalAudioMs = -1L;
+    private volatile float realtimeFactor;
+    private volatile String computeBackend = COMPUTE_BACKEND;
     private final StringBuilder preview = new StringBuilder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private long lastProgressPublishAt;
     private int lastPublishedProgress = -1;
     private int lastNotificationProgress = -1;
+    private long operationStartedAtMs;
+    private long transcriptionStartedAtMs;
+    private double smoothedRealtimeFactor;
 
     @Override
     public void onCreate() {
@@ -117,6 +146,16 @@ public final class TranscriptionService extends Service {
         running = true;
         finished = false;
         progress = 0;
+        preciseProgress = 0f;
+        elapsedMs = 0L;
+        etaMs = -1L;
+        processedAudioMs = 0L;
+        totalAudioMs = -1L;
+        realtimeFactor = 0f;
+        computeBackend = COMPUTE_BACKEND;
+        operationStartedAtMs = SystemClock.elapsedRealtime();
+        transcriptionStartedAtMs = 0L;
+        smoothedRealtimeFactor = 0d;
         lastProgressPublishAt = 0L;
         lastPublishedProgress = -1;
         lastNotificationProgress = -1;
@@ -152,7 +191,9 @@ public final class TranscriptionService extends Service {
     public Snapshot snapshot() {
         String p;
         synchronized (preview) { p = preview.toString(); }
-        return new Snapshot(status, progress, p, running, finished, error);
+        return new Snapshot(status, progress, p, running, finished, error,
+                preciseProgress, elapsedMs, etaMs, processedAudioMs, totalAudioMs,
+                realtimeFactor, computeBackend);
     }
 
     public void cancel() {
@@ -195,6 +236,7 @@ public final class TranscriptionService extends Service {
                          new FileOutputStream(getSrtResultFile(), false), StandardCharsets.UTF_8))) {
 
                 activeContext = whisper;
+                transcriptionStartedAtMs = SystemClock.elapsedRealtime();
                 publishProgress(15, "Transkrypcja…");
                 final int[] srtIndex = {1};
                 final long[] lastSrtEndMs = {0L};
@@ -204,8 +246,13 @@ public final class TranscriptionService extends Service {
                         getContentResolver(), mediaUri, whisper, cancelled,
                         new AudioTranscriber.Callback() {
                             @Override
+                            public void onPrepared(long totalSamples) {
+                                beginAudioMetrics(totalSamples);
+                            }
+
+                            @Override
                             public void onProgress(long processedSamples, long totalSamples, String newStatus) {
-                                int mapped = mapTranscriptionProgress(processedSamples, totalSamples);
+                                int mapped = updateAudioMetrics(processedSamples, totalSamples);
                                 publishProgress(mapped, newStatus);
                             }
 
@@ -249,6 +296,9 @@ public final class TranscriptionService extends Service {
             if (cancelled.get()) throw new CancelledException();
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(PREF_LAST_TRANSCRIPT_MEDIA_URI, mediaUri.toString()).apply();
+            updateElapsed();
+            etaMs = 0L;
+            preciseProgress = 100f;
             progress = 100;
             status = "Gotowe — transkrypcja i czasy słów utworzone";
             finished = true;
@@ -258,6 +308,8 @@ public final class TranscriptionService extends Service {
             updateNotification("Transkrypcja zakończona", 100, false);
 
         } catch (CancelledException e) {
+            updateElapsed();
+            etaMs = -1L;
             status = "Anulowano";
             running = false;
             finished = false;
@@ -265,6 +317,8 @@ public final class TranscriptionService extends Service {
             stopForeground(false);
             updateNotification("Transkrypcja anulowana", progress, false);
         } catch (Throwable t) {
+            updateElapsed();
+            etaMs = -1L;
             error = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
             status = "Błąd";
             running = false;
@@ -338,24 +392,62 @@ public final class TranscriptionService extends Service {
         }
     }
 
-    private int mapTranscriptionProgress(long processedSamples, long totalSamples) {
-        if (totalSamples <= 0L || processedSamples < 0L) {
-            // No duration metadata: one conservative step per completed chunk, never 100%.
-            return Math.min(94, Math.max(15, progress + 1));
+    private void beginAudioMetrics(long totalSamples) {
+        if (transcriptionStartedAtMs == 0L) {
+            transcriptionStartedAtMs = SystemClock.elapsedRealtime();
         }
+        if (totalSamples > 0L) {
+            totalAudioMs = samplesToMs(totalSamples);
+        }
+    }
+
+    private int updateAudioMetrics(long processedSamples, long totalSamples) {
+        beginAudioMetrics(totalSamples);
+        updateElapsed();
+        if (totalSamples <= 0L || processedSamples < 0L) {
+            // Unknown duration: remain conservative and never pretend to know an ETA.
+            preciseProgress = Math.min(94f, Math.max(15f, preciseProgress + 0.25f));
+            return Math.round(preciseProgress);
+        }
+
         long safeProcessed = Math.max(0L, Math.min(processedSamples, totalSamples));
-        float fraction = totalSamples > 0L
-                ? (float) safeProcessed / (float) totalSamples : 0f;
-        fraction = Math.max(0f, Math.min(1f, fraction));
-        int mapped = 15 + Math.round(80f * fraction);
-        return Math.min(95, Math.max(15, mapped));
+        processedAudioMs = Math.max(processedAudioMs, samplesToMs(safeProcessed));
+        totalAudioMs = Math.max(totalAudioMs, samplesToMs(totalSamples));
+        long transcriptionElapsed = Math.max(1L,
+                SystemClock.elapsedRealtime() - transcriptionStartedAtMs);
+        if (processedAudioMs > 0L) {
+            double instantRate = processedAudioMs / (transcriptionElapsed / 1000d);
+            if (smoothedRealtimeFactor <= 0d) smoothedRealtimeFactor = instantRate;
+            else smoothedRealtimeFactor = smoothedRealtimeFactor * 0.80d + instantRate * 0.20d;
+            realtimeFactor = (float) smoothedRealtimeFactor;
+            long remainingMs = Math.max(0L, totalAudioMs - processedAudioMs);
+            etaMs = realtimeFactor > 0f
+                    ? Math.round(remainingMs / realtimeFactor) : -1L;
+        }
+
+        double fraction = Math.max(0d, Math.min(1d,
+                safeProcessed / (double) Math.max(1L, totalSamples)));
+        float mapped = (float) (15d + 80d * fraction);
+        preciseProgress = Math.max(preciseProgress, Math.min(95f, mapped));
+        return Math.round(preciseProgress);
+    }
+
+    private long samplesToMs(long samples) {
+        return Math.max(0L, Math.round(samples * 1000d / 16000d));
+    }
+
+    private void updateElapsed() {
+        if (operationStartedAtMs > 0L) {
+            elapsedMs = Math.max(0L, SystemClock.elapsedRealtime() - operationStartedAtMs);
+        }
     }
 
     private void publishProgress(int candidate, String newStatus) {
         int clamped = Math.max(0, Math.min(99, candidate));
         progress = Math.max(progress, clamped);
         status = newStatus == null ? "Transkrypcja…" : newStatus;
-        long now = System.currentTimeMillis();
+        updateElapsed();
+        long now = SystemClock.elapsedRealtime();
         if (progress > lastPublishedProgress || now - lastProgressPublishAt >= 200L) {
             lastPublishedProgress = progress;
             lastProgressPublishAt = now;
@@ -372,9 +464,27 @@ public final class TranscriptionService extends Service {
         if (running && (progress != lastNotificationProgress)) {
             if (progress == 0 || progress == 100 || Math.abs(progress - lastNotificationProgress) >= 2) {
                 lastNotificationProgress = progress;
-                updateNotification(status, progress, true);
+                updateNotification(notificationStatus(), progress, true);
             }
         }
+    }
+
+    private String notificationStatus() {
+        if (running && etaMs >= 0L) {
+            return status + " • ETA " + formatDuration(etaMs);
+        }
+        return status;
+    }
+
+    private String formatDuration(long durationMs) {
+        long totalSeconds = Math.max(0L, Math.round(durationMs / 1000d));
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+        if (hours > 0L) {
+            return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds);
+        }
+        return String.format(Locale.ROOT, "%02d:%02d", minutes, seconds);
     }
 
     private Notification buildNotification(String text, int percent, boolean ongoing) {

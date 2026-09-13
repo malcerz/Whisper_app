@@ -29,6 +29,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Locale;
 
 @UnstableApi
 public final class MainActivity extends Activity implements
@@ -610,13 +611,48 @@ public final class MainActivity extends Activity implements
     public void onState(TranscriptionService.Snapshot snapshot) {
         runOnUiThread(() -> {
             transcriptionRunning = snapshot.running;
-            String status = snapshot.status;
+            String status = formatTranscriptionStatus(snapshot);
             if (snapshot.error != null && !snapshot.error.isEmpty()) status += ": " + snapshot.error;
-            statusLabel.setText(status + (snapshot.running ? "  " + snapshot.progress + "%" : ""));
+            statusLabel.setText(status);
             progress.setProgress(snapshot.progress);
             preview.setText(snapshot.preview == null ? "" : snapshot.preview);
             updateButtons();
         });
+    }
+
+    private String formatTranscriptionStatus(TranscriptionService.Snapshot snapshot) {
+        StringBuilder text = new StringBuilder(snapshot.status == null ? "" : snapshot.status);
+        if (snapshot.running) {
+            text.append("\nPostęp: ")
+                    .append(String.format(Locale.ROOT, "%.1f", snapshot.preciseProgress))
+                    .append("%");
+            if (snapshot.etaMs >= 0L) {
+                text.append(" • pozostało około ").append(formatDuration(snapshot.etaMs));
+            }
+            if (snapshot.realtimeFactor > 0f) {
+                text.append(" • ").append(String.format(Locale.ROOT,
+                        "%.2f× RT", snapshot.realtimeFactor));
+            }
+        } else if (snapshot.finished) {
+            text.append("\nCzas: ").append(formatDuration(snapshot.elapsedMs))
+                    .append(" • prędkość: ")
+                    .append(String.format(Locale.ROOT, "%.2f× czasu rzeczywistego",
+                            snapshot.realtimeFactor))
+                    .append("\nJednostka: ").append(snapshot.computeBackend);
+        }
+        return text.toString();
+    }
+
+    private String formatDuration(long durationMs) {
+        if (durationMs < 0L) return "--:--";
+        long totalSeconds = Math.max(0L, Math.round(durationMs / 1000d));
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+        if (hours > 0L) {
+            return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds);
+        }
+        return String.format(Locale.ROOT, "%02d:%02d", minutes, seconds);
     }
 
     @Override

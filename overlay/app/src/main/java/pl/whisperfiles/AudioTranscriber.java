@@ -29,6 +29,7 @@ final class AudioTranscriber {
     private static final long OVERLAP_MS = OVERLAP_SECONDS * 1000L;
 
     interface Callback {
+        void onPrepared(long totalSamples);
         void onProgress(long processedSamples, long totalSamples, String status);
         void onSegment(long startMs, long endMs, String text, List<SubtitleWord> words) throws IOException;
     }
@@ -62,6 +63,7 @@ final class AudioTranscriber {
                         ? inputFormat.getLong(MediaFormat.KEY_DURATION) : -1L;
                 final long totalSamples = durationUs > 0
                         ? Math.max(1L, durationUs * TARGET_RATE / 1_000_000L) : -1L;
+                callback.onPrepared(totalSamples);
 
                 SegmentEmitter emitter = new SegmentEmitter(callback);
                 Chunker chunker = new Chunker((audio, startSample, firstChunk) -> {
@@ -104,6 +106,9 @@ final class AudioTranscriber {
 
                 if (!cancelled.get()) {
                     chunker.finish();
+                    if (totalSamples > 0L) {
+                        callback.onProgress(totalSamples, totalSamples, "Transkrypcja…");
+                    }
                 }
             } finally {
                 extractor.release();

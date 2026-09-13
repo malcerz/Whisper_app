@@ -31,7 +31,7 @@ final class SubtitlePainter {
               float activeScale, int highlightStrength) {
         if (cue == null || cue.text.isEmpty() || width <= 0 || height <= 0) return;
         float safeWidth = width * SubtitleLayoutEngine.SAFE_WIDTH_FRACTION;
-        float scale = Math.max(1f, Math.min(1.6f, activeScale));
+        float scale = trackWord ? Math.max(1f, Math.min(1.6f, activeScale)) : 1f;
         int active = trackWord ? activeWord(cue.words, timeMs) : -1;
 
         fill.setTextSize(baseTextPx);
@@ -49,27 +49,27 @@ final class SubtitlePainter {
         }
 
         int lineCount = firstCount < wordCount ? 2 : 1;
-        float lineHeight = fontHeight(baseTextPx * scale) * 1.06f;
+        float lineHeight = fontHeight(baseTextPx) * 1.06f;
         float totalHeight = lineHeight * lineCount;
         float centerY = centerY(height, totalHeight, position);
-        float baselineFirst = centerY - totalHeight / 2f + baselineOffset(baseTextPx * scale);
+        float lineCenterFirst = centerY - totalHeight / 2f + lineHeight / 2f;
 
-        float width1 = dynamicLineWidth(cue.words, 0, firstCount - 1, active, baseTextPx, scale);
+        float width1 = lineWidth(cue.words, 0, firstCount - 1, baseTextPx, scale);
         float width2 = firstCount < wordCount
-                ? dynamicLineWidth(cue.words, firstCount, wordCount - 1, active, baseTextPx, scale) : 0f;
+                ? lineWidth(cue.words, firstCount, wordCount - 1, baseTextPx, scale) : 0f;
         float shrink = 1f;
         float maxMeasured = Math.max(width1, width2);
         if (maxMeasured > safeWidth && maxMeasured > 0f) shrink = safeWidth / maxMeasured;
 
         float actualBase = baseTextPx * shrink;
         float actualScale = scale;
-        width1 = dynamicLineWidth(cue.words, 0, firstCount - 1, active, actualBase, actualScale);
+        width1 = lineWidth(cue.words, 0, firstCount - 1, actualBase, actualScale);
         width2 = firstCount < wordCount
-                ? dynamicLineWidth(cue.words, firstCount, wordCount - 1, active, actualBase, actualScale) : 0f;
-        lineHeight = fontHeight(actualBase * actualScale) * 1.06f;
+                ? lineWidth(cue.words, firstCount, wordCount - 1, actualBase, actualScale) : 0f;
+        lineHeight = fontHeight(actualBase) * 1.06f;
         totalHeight = lineHeight * lineCount;
         centerY = centerY(height, totalHeight, position);
-        baselineFirst = centerY - totalHeight / 2f + baselineOffset(actualBase * actualScale);
+        lineCenterFirst = centerY - totalHeight / 2f + lineHeight / 2f;
 
         if (drawBackground) {
             float maxLine = Math.max(width1, width2);
@@ -89,68 +89,57 @@ final class SubtitlePainter {
         }
 
         drawWordLine(canvas, cue.words, 0, firstCount - 1, active, width / 2f,
-                baselineFirst, actualBase, actualScale, highlightStrength);
+                lineCenterFirst, actualBase, actualScale, highlightStrength);
         if (firstCount < wordCount) {
             drawWordLine(canvas, cue.words, firstCount, wordCount - 1, active, width / 2f,
-                    baselineFirst + lineHeight, actualBase, actualScale, highlightStrength);
+                    lineCenterFirst + lineHeight, actualBase, actualScale, highlightStrength);
         }
     }
 
     private void drawWordLine(Canvas canvas, List<SubtitleWord> words, int from, int to, int active,
-                              float centerX, float baseline, float baseTextPx, float activeScale,
+                              float centerX, float lineCenterY, float baseTextPx, float activeScale,
                               int highlightStrength) {
         if (from > to) return;
-        float total = dynamicLineWidth(words, from, to, active, baseTextPx, activeScale);
+        float total = lineWidth(words, from, to, baseTextPx, activeScale);
         float x = centerX - total / 2f;
         float space = measure(" ", baseTextPx);
-        float activeCenter = 0f;
-        boolean hasActive = false;
 
-        // Draw the complete line at the normal size first. This keeps every word visible even
-        // when the highlighted word is enlarged or when the overlay is composited by Media3.
+        // Each word is drawn once in a slot sized for its highlighted variant, so it
+        // neither has a normal copy underneath nor overlaps a neighbouring word.
         for (int i = from; i <= to; i++) {
             boolean isActive = i == active;
             String text = words.get(i).text;
-            float reservedWidth = measure(text, baseTextPx * (isActive ? activeScale : 1f));
-            fill.setTextSize(baseTextPx);
-            stroke.setTextSize(baseTextPx);
-            stroke.setStrokeWidth(Math.max(3f, baseTextPx * 0.075f));
-            fill.setColor(Color.WHITE);
-            canvas.drawText(text, x, baseline, stroke);
-            canvas.drawText(text, x, baseline, fill);
-            if (isActive) {
-                activeCenter = x + reservedWidth / 2f;
-                hasActive = true;
-            }
-            x += reservedWidth;
+            float slotWidth = measure(text, baseTextPx * activeScale);
+            float slotCenter = x + slotWidth / 2f;
+            float size = baseTextPx * (isActive ? activeScale : 1f);
+            float drawWidth = measure(text, size);
+            float drawX = slotCenter - drawWidth / 2f;
+            float baseline = baselineForVerticalCenter(size, lineCenterY);
+            drawStyledWord(canvas, text, drawX, baseline, size,
+                    isActive ? activeColor(highlightStrength) : Color.WHITE);
+            x += slotWidth;
             if (i < to) x += space;
-        }
-
-        // Overlay only the active word in the accent color, centered over its reserved slot.
-        if (hasActive) {
-            fill.setTextAlign(Paint.Align.CENTER);
-            stroke.setTextAlign(Paint.Align.CENTER);
-            String text = words.get(active).text;
-            float size = baseTextPx * activeScale;
-            fill.setTextSize(size);
-            stroke.setTextSize(size);
-            stroke.setStrokeWidth(Math.max(3f, size * 0.075f));
-            fill.setColor(activeColor(highlightStrength));
-            canvas.drawText(text, activeCenter, baseline, stroke);
-            canvas.drawText(text, activeCenter, baseline, fill);
-            fill.setTextAlign(Paint.Align.LEFT);
-            stroke.setTextAlign(Paint.Align.LEFT);
         }
     }
 
-    private float dynamicLineWidth(List<SubtitleWord> words, int from, int to, int active,
-                                   float baseTextPx, float activeScale) {
+    private void drawStyledWord(Canvas canvas, String text, float x, float baseline,
+                                float size, int color) {
+        fill.setTextSize(size);
+        stroke.setTextSize(size);
+        stroke.setStrokeWidth(Math.max(3f, size * 0.075f));
+        fill.setColor(color);
+        canvas.drawText(text, x, baseline, stroke);
+        canvas.drawText(text, x, baseline, fill);
+    }
+
+    private float lineWidth(List<SubtitleWord> words, int from, int to,
+                            float baseTextPx, float activeScale) {
         if (from > to) return 0f;
         float total = 0f;
         float space = measure(" ", baseTextPx);
+        float scale = Math.max(1f, activeScale);
         for (int i = from; i <= to; i++) {
-            float size = baseTextPx * (i == active ? activeScale : 1f);
-            total += measure(words.get(i).text, size);
+            total += measure(words.get(i).text, baseTextPx * scale);
             if (i < to) total += space;
         }
         return total;
@@ -190,10 +179,10 @@ final class SubtitlePainter {
         return fm.descent - fm.ascent;
     }
 
-    private float baselineOffset(float px) {
+    private float baselineForVerticalCenter(float px, float lineCenterY) {
         fill.setTextSize(px);
         Paint.FontMetrics fm = fill.getFontMetrics();
-        return -fm.ascent;
+        return lineCenterY - (fm.ascent + fm.descent) / 2f;
     }
 
     private void drawFallbackText(Canvas canvas, String text, int width, int height, int position,

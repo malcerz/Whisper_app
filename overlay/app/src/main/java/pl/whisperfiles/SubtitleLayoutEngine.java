@@ -26,8 +26,7 @@ final class SubtitleLayoutEngine {
         paint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         paint.setTextSize(textSizePx(height, relativeTextSize));
         float maxWidth = width * SAFE_WIDTH_FRACTION;
-        float scale = Math.max(1f, Math.min(1.6f, activeScale));
-
+        float slotScale = Math.max(1f, Math.min(1.6f, activeScale));
         ArrayList<SubtitleCue> out = new ArrayList<>();
         int i = 0;
         while (i < words.size()) {
@@ -35,7 +34,10 @@ final class SubtitleLayoutEngine {
             if (first == null || first.text.isEmpty()) { i++; continue; }
 
             int end = i;
-            int bestBreak = fitLines(words, i, end, paint, maxWidth, scale);
+            // Every word reserves the width of its highlighted variant. This makes the
+            // line assignment stable and prevents a larger active word from overlapping
+            // its neighbours.
+            int bestBreak = fitLines(words, i, end, paint, maxWidth, slotScale);
             if (bestBreak < 0) bestBreak = 1;
 
             while (end + 1 < words.size()) {
@@ -48,7 +50,7 @@ final class SubtitleLayoutEngine {
                 if (next.endMs - first.startMs > maxCueMs) break;
                 if (count >= 3 && endsSentence(current.text)) break;
 
-                int candidateBreak = fitLines(words, i, end + 1, paint, maxWidth, scale);
+                int candidateBreak = fitLines(words, i, end + 1, paint, maxWidth, slotScale);
                 if (candidateBreak < 0) break;
                 end++;
                 bestBreak = candidateBreak;
@@ -70,10 +72,10 @@ final class SubtitleLayoutEngine {
     }
 
     private static int fitLines(List<SubtitleWord> words, int from, int to, Paint paint,
-                                float maxWidth, float activeScale) {
+                                float maxWidth, float slotScale) {
         int count = to - from + 1;
         if (count <= 0) return -1;
-        if (worstLineWidth(words, from, to, paint, activeScale) <= maxWidth) return count;
+        if (worstLineWidth(words, from, to, paint, slotScale) <= maxWidth) return count;
         if (count == 1) return 1; // Painter scales an exceptionally long single word down safely.
 
         int bestSplit = -1;
@@ -81,8 +83,8 @@ final class SubtitleLayoutEngine {
         for (int split = 1; split < count; split++) {
             int leftTo = from + split - 1;
             int rightFrom = from + split;
-            float left = worstLineWidth(words, from, leftTo, paint, activeScale);
-            float right = worstLineWidth(words, rightFrom, to, paint, activeScale);
+            float left = worstLineWidth(words, from, leftTo, paint, slotScale);
+            float right = worstLineWidth(words, rightFrom, to, paint, slotScale);
             if (left > maxWidth || right > maxWidth) continue;
             float score = Math.abs(left - right) + Math.max(left, right) * 0.08f;
             if (score < bestScore) {
@@ -94,18 +96,17 @@ final class SubtitleLayoutEngine {
     }
 
     static float worstLineWidth(List<SubtitleWord> words, int from, int to,
-                                Paint paint, float activeScale) {
+                                Paint paint, float slotScale) {
         float base = 0f;
-        float maxWord = 0f;
         float space = paint.measureText(" ");
+        float scale = Math.max(1f, Math.min(1.6f, slotScale));
         for (int i = from; i <= to; i++) {
             String text = words.get(i).text;
-            float w = paint.measureText(text);
+            float w = paint.measureText(text) * scale;
             if (i > from) base += space;
             base += w;
-            maxWord = Math.max(maxWord, w);
         }
-        return base + Math.max(0f, activeScale - 1f) * maxWord;
+        return base;
     }
 
     private static String buildText(List<SubtitleWord> words, int firstLineCount) {

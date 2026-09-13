@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
 #include "whisper.h"
@@ -13,6 +14,34 @@ static atomic_bool g_abort_requested = ATOMIC_VAR_INIT(false);
 static bool abort_callback(void * user_data) {
     (void) user_data;
     return atomic_load_explicit(&g_abort_requested, memory_order_relaxed);
+}
+
+struct progress_data {
+    JNIEnv * env;
+    jclass clazz;
+    jmethodID method;
+    int64_t chunk_start_samples;
+    int64_t chunk_samples;
+    int64_t total_samples;
+};
+
+static void progress_callback(
+        struct whisper_context * ctx,
+        struct whisper_state * state,
+        int progress,
+        void * user_data) {
+    (void) ctx;
+    (void) state;
+    struct progress_data * data = (struct progress_data *) user_data;
+    if (data == NULL || data->env == NULL || data->clazz == NULL || data->method == NULL) return;
+
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+    int64_t processed = data->chunk_start_samples
+            + (data->chunk_samples * (int64_t) progress) / 100L;
+    (*data->env)->CallStaticVoidMethod(
+            data->env, data->clazz, data->method,
+            (jlong) processed, (jlong) data->total_samples);
 }
 
 JNIEXPORT jlong JNICALL
@@ -42,7 +71,8 @@ Java_com_whispercpp_java_whisper_WhisperLib_setAbortRequested(
 JNIEXPORT jint JNICALL
 Java_com_whispercpp_java_whisper_WhisperLib_fullTranscribe(
         JNIEnv * env, jclass clazz, jlong context_ptr, jint num_threads,
-        jfloatArray audio_data, jstring language_str) {
+        jfloatArray audio_data, jstring language_str,
+        jlong chunk_start_samples, jlong total_samples) {
     (void) clazz;
     if (context_ptr == 0 || audio_data == NULL) return -1;
 
@@ -69,6 +99,19 @@ Java_com_whispercpp_java_whisper_WhisperLib_fullTranscribe(
     params.no_context = true;
     params.single_segment = false;
     params.token_timestamps = true;
+    struct progress_data progress = {
+        env, clazz, (*env)->GetStaticMethodID(
+                env, clazz, "onNativeProgress", "(JJ)V"),
+        (int64_t) chunk_start_samples,
+        (int64_t) n,
+        (int64_t) total_samples,
+    };
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        progress.method = NULL;
+    }
+    params.progress_callback = progress.method == NULL ? NULL : progress_callback;
+    params.progress_callback_user_data = &progress;
     params.abort_callback = abort_callback;
     params.abort_callback_user_data = NULL;
 

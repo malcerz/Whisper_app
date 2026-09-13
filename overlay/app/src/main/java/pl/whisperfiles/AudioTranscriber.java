@@ -29,7 +29,7 @@ final class AudioTranscriber {
     private static final long OVERLAP_MS = OVERLAP_SECONDS * 1000L;
 
     interface Callback {
-        void onProgress(int percent, String status);
+        void onProgress(long processedSamples, long totalSamples, String status);
         void onSegment(long startMs, long endMs, String text, List<SubtitleWord> words) throws IOException;
     }
 
@@ -60,13 +60,19 @@ final class AudioTranscriber {
 
                 long durationUs = inputFormat.containsKey(MediaFormat.KEY_DURATION)
                         ? inputFormat.getLong(MediaFormat.KEY_DURATION) : -1L;
+                final long totalSamples = durationUs > 0
+                        ? Math.max(1L, durationUs * TARGET_RATE / 1_000_000L) : -1L;
 
                 SegmentEmitter emitter = new SegmentEmitter(callback);
                 Chunker chunker = new Chunker((audio, startSample, firstChunk) -> {
                     if (cancelled.get()) return;
-                    callback.onProgress(progressFromSample(startSample, durationUs), "Transkrypcja…");
-                    List<WhisperSegment> segments = whisper.transcribe(audio, "pl");
+                    WhisperContext.ProgressListener progressListener = totalSamples > 0
+                            ? (processed, total) -> callback.onProgress(
+                                    processed, total, "Transkrypcja…") : null;
+                    List<WhisperSegment> segments = whisper.transcribe(
+                            audio, "pl", startSample, totalSamples, progressListener);
                     if (cancelled.get()) return;
+                    callback.onProgress(startSample + audio.length, totalSamples, "Transkrypcja…");
                     long chunkStartMs = startSample * 1000L / TARGET_RATE;
                     for (WhisperSegment segment : segments) {
                         long localStartMs = segment.getStart() * 10L;
@@ -91,14 +97,13 @@ final class AudioTranscriber {
                 });
 
                 if ("audio/raw".equalsIgnoreCase(mime)) {
-                    decodeRaw(extractor, inputFormat, durationUs, cancelled, callback, chunker);
+                    decodeRaw(extractor, inputFormat, cancelled, chunker);
                 } else {
-                    decodeWithCodec(extractor, inputFormat, mime, durationUs, cancelled, callback, chunker);
+                    decodeWithCodec(extractor, inputFormat, mime, cancelled, chunker);
                 }
 
                 if (!cancelled.get()) {
                     chunker.finish();
-                    callback.onProgress(100, "Gotowe");
                 }
             } finally {
                 extractor.release();
@@ -118,9 +123,7 @@ final class AudioTranscriber {
     private static void decodeRaw(
             MediaExtractor extractor,
             MediaFormat format,
-            long durationUs,
             AtomicBoolean cancelled,
-            Callback callback,
             Chunker chunker) throws Exception {
 
         int sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
@@ -136,11 +139,9 @@ final class AudioTranscriber {
             buffer.clear();
             int size = extractor.readSampleData(buffer, 0);
             if (size < 0) break;
-            long ptsUs = extractor.getSampleTime();
             buffer.position(0);
             buffer.limit(size);
             converter.accept(buffer);
-            reportDecodeProgress(ptsUs, durationUs, callback);
             extractor.advance();
         }
     }
@@ -149,9 +150,7 @@ final class AudioTranscriber {
             MediaExtractor extractor,
             MediaFormat inputFormat,
             String mime,
-            long durationUs,
             AtomicBoolean cancelled,
-            Callback callback,
             Chunker chunker) throws Exception {
 
         MediaCodec codec = MediaCodec.createDecoderByType(mime);
@@ -182,9 +181,8 @@ final class AudioTranscriber {
                             codec.queueInputBuffer(inputIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                             inputDone = true;
                         } else {
-                            long ptsUs = extractor.getSampleTime();
-                            codec.queueInputBuffer(inputIndex, 0, size, ptsUs, extractor.getSampleFlags());
-                            reportDecodeProgress(ptsUs, durationUs, callback);
+                            codec.queueInputBuffer(inputIndex, 0, size,
+                                    extractor.getSampleTime(), extractor.getSampleFlags());
                             extractor.advance();
                         }
                     }
@@ -217,18 +215,6 @@ final class AudioTranscriber {
             try { codec.stop(); } catch (Exception ignored) {}
             codec.release();
         }
-    }
-
-    private static void reportDecodeProgress(long ptsUs, long durationUs, Callback callback) {
-        if (durationUs <= 0 || ptsUs < 0) return;
-        int percent = (int) Math.max(0, Math.min(99, (ptsUs * 100L) / durationUs));
-        callback.onProgress(percent, "Dekodowanie / transkrypcja…");
-    }
-
-    private static int progressFromSample(long startSample, long durationUs) {
-        if (durationUs <= 0) return 0;
-        long ms = startSample * 1000L / TARGET_RATE;
-        return (int) Math.max(0, Math.min(99, (ms * 100000L) / durationUs));
     }
 
     private interface FloatSink { void onSample(float sample) throws Exception; }

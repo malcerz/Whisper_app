@@ -4,6 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class WhisperContext implements AutoCloseable {
+    public interface ProgressListener {
+        void onProgress(long processedSamples, long totalSamples);
+    }
+
+    private static volatile ProgressListener progressListener;
     private long ptr;
 
     private WhisperContext(long ptr) {
@@ -20,9 +25,22 @@ public final class WhisperContext implements AutoCloseable {
     }
 
     public List<WhisperSegment> transcribe(float[] audio, String language) {
+        return transcribe(audio, language, 0L, -1L, null);
+    }
+
+    public List<WhisperSegment> transcribe(float[] audio, String language,
+                                           long chunkStartSamples, long totalSamples,
+                                           ProgressListener listener) {
         if (ptr == 0L) throw new IllegalStateException("WhisperContext jest zamknięty");
         int threads = Math.max(1, Math.min(6, Runtime.getRuntime().availableProcessors() - 1));
-        int rc = WhisperLib.fullTranscribe(ptr, threads, audio, language == null ? "pl" : language);
+        progressListener = listener;
+        int rc;
+        try {
+            rc = WhisperLib.fullTranscribe(ptr, threads, audio,
+                    language == null ? "pl" : language, chunkStartSamples, totalSamples);
+        } finally {
+            progressListener = null;
+        }
         if (rc != 0) return new ArrayList<>();
 
         int count = WhisperLib.getTextSegmentCount(ptr);
@@ -35,6 +53,11 @@ public final class WhisperContext implements AutoCloseable {
             out.add(new WhisperSegment(segmentStart, segmentEnd, segmentText, words));
         }
         return out;
+    }
+
+    static void dispatchNativeProgress(long processedSamples, long totalSamples) {
+        ProgressListener listener = progressListener;
+        if (listener != null) listener.onProgress(processedSamples, totalSamples);
     }
 
     private List<WhisperWord> readWords(int segmentIndex, long segmentStart, long segmentEnd, String segmentText) {

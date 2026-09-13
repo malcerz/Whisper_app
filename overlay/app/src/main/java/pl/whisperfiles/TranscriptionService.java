@@ -11,7 +11,9 @@ import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 
 import androidx.media3.common.util.UnstableApi;
@@ -84,6 +86,9 @@ public final class TranscriptionService extends Service {
     private volatile String status = "Gotowy";
     private volatile String error = "";
     private final StringBuilder preview = new StringBuilder();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private long lastProgressPublishAt;
+    private int lastPublishedProgress = -1;
     private int lastNotificationProgress = -1;
 
     @Override
@@ -112,6 +117,9 @@ public final class TranscriptionService extends Service {
         running = true;
         finished = false;
         progress = 0;
+        lastProgressPublishAt = 0L;
+        lastPublishedProgress = -1;
+        lastNotificationProgress = -1;
         error = "";
         status = "Uruchamianie…";
         synchronized (preview) { preview.setLength(0); }
@@ -128,7 +136,13 @@ public final class TranscriptionService extends Service {
 
     public void setListener(Listener listener) {
         this.listener = listener;
-        if (listener != null) listener.onState(snapshot());
+        if (listener != null) {
+            Snapshot state = snapshot();
+            mainHandler.post(() -> {
+                Listener current = this.listener;
+                if (current != null) current.onState(state);
+            });
+        }
     }
 
     public void clearListener(Listener listener) {
@@ -168,12 +182,11 @@ public final class TranscriptionService extends Service {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WhisperFiles:Transcription");
             wakeLock.acquire();
 
+            publishProgress(2, "Przygotowanie wejścia…");
             File modelFile = ensureModelCached(modelUri);
             if (cancelled.get()) throw new CancelledException();
 
-            status = "Ładowanie modelu…";
-            progress = 0;
-            publish();
+            publishProgress(11, "Ładowanie modelu…");
 
             try (WhisperContext whisper = WhisperContext.create(modelFile.getAbsolutePath());
                  BufferedWriter txt = new BufferedWriter(new OutputStreamWriter(
@@ -182,6 +195,7 @@ public final class TranscriptionService extends Service {
                          new FileOutputStream(getSrtResultFile(), false), StandardCharsets.UTF_8))) {
 
                 activeContext = whisper;
+                publishProgress(15, "Transkrypcja…");
                 final int[] srtIndex = {1};
                 final long[] lastSrtEndMs = {0L};
                 final ArrayList<SubtitleWord> allWords = new ArrayList<>();
@@ -190,10 +204,9 @@ public final class TranscriptionService extends Service {
                         getContentResolver(), mediaUri, whisper, cancelled,
                         new AudioTranscriber.Callback() {
                             @Override
-                            public void onProgress(int percent, String newStatus) {
-                                progress = percent;
-                                status = newStatus;
-                                publish();
+                            public void onProgress(long processedSamples, long totalSamples, String newStatus) {
+                                int mapped = mapTranscriptionProgress(processedSamples, totalSamples);
+                                publishProgress(mapped, newStatus);
                             }
 
                             @Override
@@ -223,9 +236,12 @@ public final class TranscriptionService extends Service {
                                 publish();
                             }
                         });
+                if (cancelled.get()) throw new CancelledException();
+                publishProgress(96, "Budowanie napisów…");
                 if (!cancelled.get() && !allWords.isEmpty()) {
                     SubtitleTimelineStore.write(this, allWords);
                 }
+                publishProgress(99, "Zapisywanie napisów…");
             } finally {
                 activeContext = null;
             }
@@ -268,6 +284,7 @@ public final class TranscriptionService extends Service {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         String previousUri = prefs.getString(PREF_CACHED_MODEL_URI, "");
         if (modelUri.toString().equals(previousUri) && model.isFile() && model.length() > 1024 * 1024) {
+            publishProgress(8, "Ładowanie modelu…");
             return model;
         }
 
@@ -275,9 +292,7 @@ public final class TranscriptionService extends Service {
         File temp = new File(getFilesDir(), "whisper-model.tmp");
         if (temp.exists()) temp.delete();
 
-        status = "Kopiowanie modelu…";
-        progress = 0;
-        publish();
+        publishProgress(5, "Kopiowanie modelu…");
 
         long copied = 0;
         byte[] buffer = new byte[1024 * 1024];
@@ -291,9 +306,8 @@ public final class TranscriptionService extends Service {
                 out.write(buffer, 0, n);
                 copied += n;
                 if (total > 0) {
-                    int p = (int) Math.min(99, copied * 100L / total);
-                    status = "Kopiowanie modelu… " + p + "%";
-                    publish();
+                    int p = 5 + (int) Math.min(5d, copied * 5d / total);
+                    publishProgress(p, "Kopiowanie modelu…");
                 }
             }
             out.getFD().sync();
@@ -324,9 +338,37 @@ public final class TranscriptionService extends Service {
         }
     }
 
+    private int mapTranscriptionProgress(long processedSamples, long totalSamples) {
+        if (totalSamples <= 0L || processedSamples < 0L) {
+            // No duration metadata: one conservative step per completed chunk, never 100%.
+            return Math.min(94, Math.max(15, progress + 1));
+        }
+        long safeProcessed = Math.max(0L, Math.min(processedSamples, totalSamples));
+        float fraction = totalSamples > 0L
+                ? (float) safeProcessed / (float) totalSamples : 0f;
+        fraction = Math.max(0f, Math.min(1f, fraction));
+        int mapped = 15 + Math.round(80f * fraction);
+        return Math.min(95, Math.max(15, mapped));
+    }
+
+    private void publishProgress(int candidate, String newStatus) {
+        int clamped = Math.max(0, Math.min(99, candidate));
+        progress = Math.max(progress, clamped);
+        status = newStatus == null ? "Transkrypcja…" : newStatus;
+        long now = System.currentTimeMillis();
+        if (progress > lastPublishedProgress || now - lastProgressPublishAt >= 200L) {
+            lastPublishedProgress = progress;
+            lastProgressPublishAt = now;
+            publish();
+        }
+    }
+
     private void publish() {
-        Listener l = listener;
-        if (l != null) l.onState(snapshot());
+        Snapshot state = snapshot();
+        mainHandler.post(() -> {
+            Listener l = listener;
+            if (l != null) l.onState(state);
+        });
         if (running && (progress != lastNotificationProgress)) {
             if (progress == 0 || progress == 100 || Math.abs(progress - lastNotificationProgress) >= 2) {
                 lastNotificationProgress = progress;

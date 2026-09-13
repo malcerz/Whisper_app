@@ -263,7 +263,22 @@ public final class TranscriptionService extends Service {
                                 txt.newLine();
                                 txt.flush();
 
-                                List<SubtitleCue> cues = SubtitleFormatter.format(startMs, endMs, text);
+                                // Whisper segment timestamps may include leading silence.
+                                // The subtitle must begin with the first actually timed word,
+                                // otherwise the first cue can incorrectly start at 00:00.
+                                long subtitleStartMs = startMs;
+                                long subtitleEndMs = endMs;
+                                if (words != null && !words.isEmpty()) {
+                                    SubtitleWord firstWord = words.get(0);
+                                    SubtitleWord lastWord = words.get(words.size() - 1);
+                                    if (firstWord != null && lastWord != null &&
+                                            lastWord.endMs > firstWord.startMs) {
+                                        subtitleStartMs = firstWord.startMs;
+                                        subtitleEndMs = lastWord.endMs;
+                                    }
+                                }
+                                List<SubtitleCue> cues = SubtitleFormatter.format(
+                                        subtitleStartMs, subtitleEndMs, text);
                                 for (SubtitleCue cue : cues) {
                                     long cueStart = Math.max(cue.startMs, lastSrtEndMs[0]);
                                     long cueEnd = cue.endMs;

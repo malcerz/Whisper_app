@@ -24,11 +24,11 @@ public final class TranscriptEditorActivity extends Activity {
     private static final String TAG = "TranscriptEditor";
 
     static final String EXTRA_MEDIA_URI = "media_uri";
-    static final String EXTRA_SIZE = "subtitle_size";
+    static final String EXTRA_SIZE_PERCENT = "subtitle_size_percent";
     static final String EXTRA_WORD_SCALE = "word_scale";
 
     private Uri mediaUri;
-    private int subtitleSize;
+    private int subtitleSizePercentX10;
     private float activeWordScale;
     private List<SubtitleWord> words = new ArrayList<>();
     private EditText editor;
@@ -46,7 +46,8 @@ public final class TranscriptEditorActivity extends Activity {
         }
 
         mediaUri = Uri.parse(media);
-        subtitleSize = getIntent().getIntExtra(EXTRA_SIZE, SubtitleBurnService.SIZE_MEDIUM);
+        subtitleSizePercentX10 = getIntent().getIntExtra(EXTRA_SIZE_PERCENT,
+                SubtitleStyle.SIZE_X10_DEFAULT);
         activeWordScale = getIntent().getFloatExtra(EXTRA_WORD_SCALE, 1f);
 
         try {
@@ -119,8 +120,8 @@ public final class TranscriptEditorActivity extends Activity {
             List<SubtitleWord> updated = SubtitleTimelineStore.replaceRange(
                     words, 0, words.size() - 1, text);
             if (updated.isEmpty()) throw new IllegalStateException("Brak słów po edycji");
-            SubtitleProject.saveWordsAndOutputs(
-                    this, mediaUri, updated, subtitleSize, activeWordScale);
+            SubtitleProject.saveWordsAndOutputs(this, mediaUri, updated,
+                    SubtitleStyle.relativeTextSize(subtitleSizePercentX10), activeWordScale);
             words = updated;
             dirty = false;
             return true;

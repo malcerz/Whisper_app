@@ -7,19 +7,20 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.provider.OpenableColumns;
+import android.view.Gravity;
 import android.view.View;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -45,12 +46,16 @@ public final class MainActivity extends Activity implements
     private static final String PREFS = "whisper_files_ui";
     private static final String PREF_MEDIA = "media_uri";
     private static final String PREF_MODEL = "model_uri";
-    private static final String PREF_SUB_SIZE = "subtitle_size";
-    private static final String PREF_SUB_POSITION = "subtitle_position";
+    private static final String PREF_SUB_SIZE_PERCENT = "subtitle_size_percent_x10";
+    private static final String PREF_SUB_POSITION_PERCENT = "subtitle_position_percent";
     private static final String PREF_SUB_BACKGROUND = "subtitle_background";
     private static final String PREF_TRACK_WORD = "track_word";
     private static final String PREF_WORD_SCALE = "word_scale_percent";
     private static final String PREF_WORD_HIGHLIGHT = "word_highlight";
+    private static final String PREF_WORD_HIGHLIGHT_COLOR = "word_highlight_color";
+    // Legacy v0.4 keys, kept only to migrate old installations.
+    private static final String PREF_SUB_SIZE_LEGACY = "subtitle_size";
+    private static final String PREF_SUB_POSITION_LEGACY = "subtitle_position";
 
     private Uri mediaUri;
     private Uri modelUri;
@@ -78,8 +83,13 @@ public final class MainActivity extends Activity implements
     private Button burnButton;
     private Button cancelBurnButton;
     private Button saveMp4Button;
-    private Spinner subtitleSize;
-    private Spinner subtitlePosition;
+    private SeekBar sizeSeek;
+    private SeekBar positionSeek;
+    private TextView sizeLabel;
+    private TextView positionLabel;
+    private TextView highlightColorLabel;
+    private TextView[] highlightSwatches;
+    private int highlightColorIndex = SubtitleStyle.HIGHLIGHT_COLOR_DEFAULT_INDEX;
     private CheckBox subtitleBackground;
     private CheckBox trackWord;
     private SeekBar wordScaleSeek;
@@ -225,18 +235,25 @@ public final class MainActivity extends Activity implements
         videoTitle.setPadding(0, dp(22), 0, dp(4));
         root.addView(videoTitle);
         TextView videoHint = text(
-                "Dla MP4 napisy są renderowane na stałe w obrazie. Audio pozostaje bez efektów.",
+                "Dla MP4 napisy są renderowane na stałe w obrazie. Audio pozostaje bez efektów. " +
+                        "Rozmiar i położenie ustawisz suwakami — podgląd i eksport używają tych samych wartości.",
                 14, false);
         videoHint.setPadding(0, 0, 0, dp(10));
         root.addView(videoHint);
 
-        LinearLayout styleRow = new LinearLayout(this);
-        styleRow.setOrientation(LinearLayout.HORIZONTAL);
-        subtitleSize = spinner(new String[]{"Małe", "Średnie", "Duże"});
-        subtitlePosition = spinner(new String[]{"Dół", "Środek", "Góra"});
-        styleRow.addView(subtitleSize, weighted());
-        styleRow.addView(subtitlePosition, weighted());
-        root.addView(styleRow);
+        sizeLabel = text("", 14, false);
+        sizeLabel.setPadding(0, dp(2), 0, 0);
+        root.addView(sizeLabel);
+        sizeSeek = new SeekBar(this);
+        sizeSeek.setMax(SubtitleStyle.SIZE_X10_MAX - SubtitleStyle.SIZE_X10_MIN);
+        root.addView(sizeSeek);
+
+        positionLabel = text("", 14, false);
+        positionLabel.setPadding(0, dp(6), 0, 0);
+        root.addView(positionLabel);
+        positionSeek = new SeekBar(this);
+        positionSeek.setMax(SubtitleStyle.POSITION_PERCENT_MAX - SubtitleStyle.POSITION_PERCENT_MIN);
+        root.addView(positionSeek);
 
         subtitleBackground = new CheckBox(this);
         subtitleBackground.setText("Półprzezroczyste czarne tło pod napisami");
@@ -245,6 +262,11 @@ public final class MainActivity extends Activity implements
         trackWord = new CheckBox(this);
         trackWord.setText("Śledź aktualnie wypowiadane słowo");
         root.addView(trackWord);
+
+        highlightColorLabel = text("", 14, false);
+        highlightColorLabel.setPadding(0, dp(8), 0, dp(4));
+        root.addView(highlightColorLabel);
+        root.addView(buildColorSwatches());
 
         wordScaleLabel = text("Powiększenie aktywnego słowa", 14, false);
         wordScaleLabel.setPadding(0, dp(8), 0, 0);
@@ -262,14 +284,16 @@ public final class MainActivity extends Activity implements
 
         SeekBar.OnSeekBarChangeListener styleListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                updateWordStyleLabels();
+                updateStyleLabels();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) { saveSubtitleStyle(); }
         };
+        sizeSeek.setOnSeekBarChangeListener(styleListener);
+        positionSeek.setOnSeekBarChangeListener(styleListener);
         wordScaleSeek.setOnSeekBarChangeListener(styleListener);
         wordHighlightSeek.setOnSeekBarChangeListener(styleListener);
-        trackWord.setOnCheckedChangeListener((buttonView, isChecked) -> updateWordStyleLabels());
+        trackWord.setOnCheckedChangeListener((buttonView, isChecked) -> updateStyleLabels());
 
         burnButton = button("Wypal napisy do MP4");
         burnButton.setOnClickListener(v -> startBurn());
@@ -357,7 +381,7 @@ public final class MainActivity extends Activity implements
         saveSubtitleStyle();
         try {
             SubtitleProject.regenerateOutputs(this, mediaUri,
-                    subtitleSize.getSelectedItemPosition(), effectiveWordScale());
+                    currentRelativeSize(), effectiveWordScale());
         } catch (Exception e) {
             Toast.makeText(this, "Nie można przygotować napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
             return;
@@ -365,12 +389,13 @@ public final class MainActivity extends Activity implements
         Intent i = new Intent(this, SubtitleBurnService.class);
         i.setAction(SubtitleBurnService.ACTION_START);
         i.putExtra(SubtitleBurnService.EXTRA_MEDIA_URI, mediaUri.toString());
-        i.putExtra(SubtitleBurnService.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
-        i.putExtra(SubtitleBurnService.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
+        i.putExtra(SubtitleBurnService.EXTRA_SIZE_PERCENT, currentSizePercentX10());
+        i.putExtra(SubtitleBurnService.EXTRA_POSITION_PERCENT, currentPositionPercent());
         i.putExtra(SubtitleBurnService.EXTRA_BACKGROUND, subtitleBackground.isChecked());
         i.putExtra(SubtitleBurnService.EXTRA_TRACK_WORD, trackWord.isChecked());
         i.putExtra(SubtitleBurnService.EXTRA_WORD_SCALE, currentWordScale());
         i.putExtra(SubtitleBurnService.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
+        i.putExtra(SubtitleBurnService.EXTRA_HIGHLIGHT_COLOR, currentHighlightColor());
         startForegroundService(i);
         burnRunning = true;
         burnStatusLabel.setText("Eksport filmu: uruchamianie…");
@@ -382,7 +407,7 @@ public final class MainActivity extends Activity implements
             try {
                 saveSubtitleStyle();
                 SubtitleProject.regenerateOutputs(this, mediaUri,
-                        subtitleSize.getSelectedItemPosition(), effectiveWordScale());
+                        currentRelativeSize(), effectiveWordScale());
             } catch (Exception e) {
                 Toast.makeText(this, "Nie można przeliczyć napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 return;
@@ -496,24 +521,50 @@ public final class MainActivity extends Activity implements
         String model = prefs.getString(PREF_MODEL, null);
         if (media != null) mediaUri = Uri.parse(media);
         if (model != null) modelUri = Uri.parse(model);
-        subtitleSize.setSelection(prefs.getInt(PREF_SUB_SIZE, SubtitleBurnService.SIZE_MEDIUM));
-        subtitlePosition.setSelection(prefs.getInt(PREF_SUB_POSITION, SubtitleCanvasOverlay.POSITION_BOTTOM));
+        sizeSeek.setProgress(loadSizePercentX10(prefs) - SubtitleStyle.SIZE_X10_MIN);
+        positionSeek.setProgress(loadPositionPercent(prefs) - SubtitleStyle.POSITION_PERCENT_MIN);
         subtitleBackground.setChecked(prefs.getBoolean(PREF_SUB_BACKGROUND, false));
         trackWord.setChecked(prefs.getBoolean(PREF_TRACK_WORD, true));
         wordScaleSeek.setProgress(prefs.getInt(PREF_WORD_SCALE, 12));
         wordHighlightSeek.setProgress(prefs.getInt(PREF_WORD_HIGHLIGHT, 55));
-        updateWordStyleLabels();
+        highlightColorIndex = SubtitleStyle.highlightColorIndex(
+                prefs.getInt(PREF_WORD_HIGHLIGHT_COLOR, SubtitleStyle.defaultHighlightColor()));
+        refreshHighlightSwatches();
+        updateStyleLabels();
     }
 
     private void saveSubtitleStyle() {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putInt(PREF_SUB_SIZE, subtitleSize.getSelectedItemPosition())
-                .putInt(PREF_SUB_POSITION, subtitlePosition.getSelectedItemPosition())
+                .putInt(PREF_SUB_SIZE_PERCENT, currentSizePercentX10())
+                .putInt(PREF_SUB_POSITION_PERCENT, currentPositionPercent())
                 .putBoolean(PREF_SUB_BACKGROUND, subtitleBackground.isChecked())
                 .putBoolean(PREF_TRACK_WORD, trackWord.isChecked())
                 .putInt(PREF_WORD_SCALE, wordScaleSeek.getProgress())
                 .putInt(PREF_WORD_HIGHLIGHT, wordHighlightSeek.getProgress())
+                .putInt(PREF_WORD_HIGHLIGHT_COLOR, currentHighlightColor())
                 .apply();
+    }
+
+    /** Legacy Małe/Średnie/Duże value (0/1/2) is converted to a text height percentage. */
+    private int loadSizePercentX10(SharedPreferences prefs) {
+        if (prefs.contains(PREF_SUB_SIZE_PERCENT)) {
+            return prefs.getInt(PREF_SUB_SIZE_PERCENT, SubtitleStyle.SIZE_X10_DEFAULT);
+        }
+        int legacy = prefs.getInt(PREF_SUB_SIZE_LEGACY, -1);
+        if (legacy == 0) return 38;
+        if (legacy == 2) return 60;
+        return SubtitleStyle.SIZE_X10_DEFAULT;
+    }
+
+    /** Legacy Dół/Środek/Góra value (0/1/2) is converted to a position percentage from the top. */
+    private int loadPositionPercent(SharedPreferences prefs) {
+        if (prefs.contains(PREF_SUB_POSITION_PERCENT)) {
+            return prefs.getInt(PREF_SUB_POSITION_PERCENT, SubtitleStyle.POSITION_PERCENT_DEFAULT);
+        }
+        int legacy = prefs.getInt(PREF_SUB_POSITION_LEGACY, -1);
+        if (legacy == 1) return 50;
+        if (legacy == 2) return 12;
+        return SubtitleStyle.POSITION_PERCENT_DEFAULT;
     }
 
     private void openSubtitleEditor() {
@@ -526,12 +577,13 @@ public final class MainActivity extends Activity implements
             saveSubtitleStyle();
             Intent i = new Intent(this, SubtitleEditorActivity.class);
             i.putExtra(SubtitleEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
-            i.putExtra(SubtitleEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
-            i.putExtra(SubtitleEditorActivity.EXTRA_POSITION, subtitlePosition.getSelectedItemPosition());
+            i.putExtra(SubtitleEditorActivity.EXTRA_SIZE_PERCENT, currentSizePercentX10());
+            i.putExtra(SubtitleEditorActivity.EXTRA_POSITION_PERCENT, currentPositionPercent());
             i.putExtra(SubtitleEditorActivity.EXTRA_BACKGROUND, subtitleBackground.isChecked());
             i.putExtra(SubtitleEditorActivity.EXTRA_TRACK_WORD, trackWord.isChecked());
             i.putExtra(SubtitleEditorActivity.EXTRA_WORD_SCALE, currentWordScale());
             i.putExtra(SubtitleEditorActivity.EXTRA_HIGHLIGHT, wordHighlightSeek.getProgress());
+            i.putExtra(SubtitleEditorActivity.EXTRA_HIGHLIGHT_COLOR, currentHighlightColor());
             startActivityForResult(i, EDIT_SUBTITLES);
         } catch (RuntimeException e) {
             Toast.makeText(this, "Nie można otworzyć edytora napisów", Toast.LENGTH_LONG).show();
@@ -547,7 +599,7 @@ public final class MainActivity extends Activity implements
             saveSubtitleStyle();
             Intent i = new Intent(this, TranscriptEditorActivity.class);
             i.putExtra(TranscriptEditorActivity.EXTRA_MEDIA_URI, mediaUri.toString());
-            i.putExtra(TranscriptEditorActivity.EXTRA_SIZE, subtitleSize.getSelectedItemPosition());
+            i.putExtra(TranscriptEditorActivity.EXTRA_SIZE_PERCENT, currentSizePercentX10());
             i.putExtra(TranscriptEditorActivity.EXTRA_WORD_SCALE, effectiveWordScale());
             startActivityForResult(i, EDIT_TRANSCRIPT);
         } catch (RuntimeException e) {
@@ -559,11 +611,36 @@ public final class MainActivity extends Activity implements
         return 1f + wordScaleSeek.getProgress() / 100f;
     }
 
+    private int currentSizePercentX10() {
+        return sizeSeek.getProgress() + SubtitleStyle.SIZE_X10_MIN;
+    }
+
+    private int currentPositionPercent() {
+        return positionSeek.getProgress() + SubtitleStyle.POSITION_PERCENT_MIN;
+    }
+
+    private float currentRelativeSize() {
+        return SubtitleStyle.relativeTextSize(currentSizePercentX10());
+    }
+
+    private int currentHighlightColor() {
+        return SubtitleStyle.highlightColor(highlightColorIndex);
+    }
+
     private float effectiveWordScale() {
         return trackWord.isChecked() ? currentWordScale() : 1f;
     }
 
-    private void updateWordStyleLabels() {
+    private void updateStyleLabels() {
+        if (sizeLabel != null && sizeSeek != null) {
+            sizeLabel.setText(String.format(Locale.ROOT,
+                    "Rozmiar napisów: %.1f%% wysokości obrazu", currentSizePercentX10() / 10f));
+        }
+        if (positionLabel != null && positionSeek != null) {
+            positionLabel.setText(String.format(Locale.ROOT,
+                    "Położenie napisów: %d%% od góry obrazu (0%% = góra, 100%% = dół)",
+                    currentPositionPercent()));
+        }
         if (wordScaleLabel != null && wordScaleSeek != null) {
             wordScaleLabel.setText("Powiększenie aktywnego słowa: " + (100 + wordScaleSeek.getProgress()) + "%");
         }
@@ -572,6 +649,54 @@ public final class MainActivity extends Activity implements
         }
         if (wordScaleSeek != null && trackWord != null) wordScaleSeek.setEnabled(!burnRunning && trackWord.isChecked());
         if (wordHighlightSeek != null && trackWord != null) wordHighlightSeek.setEnabled(!burnRunning && trackWord.isChecked());
+    }
+
+    private LinearLayout buildColorSwatches() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        highlightSwatches = new TextView[SubtitleStyle.HIGHLIGHT_COLORS.length];
+        for (int i = 0; i < highlightSwatches.length; i++) {
+            final int index = i;
+            TextView swatch = new TextView(this);
+            swatch.setGravity(Gravity.CENTER);
+            swatch.setTextSize(18);
+            swatch.setContentDescription(SubtitleStyle.HIGHLIGHT_COLOR_NAMES[i]);
+            swatch.setOnClickListener(v -> selectHighlightColor(index));
+            highlightSwatches[i] = swatch;
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+            params.setMargins(dp(3), dp(3), dp(3), dp(3));
+            row.addView(swatch, params);
+        }
+        return row;
+    }
+
+    private void selectHighlightColor(int index) {
+        highlightColorIndex = index;
+        refreshHighlightSwatches();
+        saveSubtitleStyle();
+    }
+
+    private void refreshHighlightSwatches() {
+        if (highlightSwatches == null) return;
+        for (int i = 0; i < highlightSwatches.length; i++) {
+            TextView swatch = highlightSwatches[i];
+            int color = SubtitleStyle.HIGHLIGHT_COLORS[i];
+            int contrast = SubtitleStyle.isBright(color) ? Color.BLACK : Color.WHITE;
+            boolean selected = i == highlightColorIndex;
+            GradientDrawable shape = new GradientDrawable();
+            shape.setColor(color);
+            shape.setCornerRadius(dp(8));
+            shape.setStroke(selected ? dp(3) : dp(1), selected ? contrast : 0x33808080);
+            swatch.setBackground(shape);
+            swatch.setText(selected ? "✓" : "");
+            swatch.setTextColor(contrast);
+            swatch.setEnabled(!burnRunning);
+            swatch.setAlpha(burnRunning ? 0.4f : 1f);
+        }
+        if (highlightColorLabel != null) {
+            highlightColorLabel.setText("Kolor wyróżnienia: "
+                    + SubtitleStyle.HIGHLIGHT_COLOR_NAMES[highlightColorIndex]);
+        }
     }
 
     private String readSmallText(File file) throws IOException {
@@ -715,12 +840,18 @@ public final class MainActivity extends Activity implements
         editSubtitlesButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
         burnButton.setEnabled(!transcriptionRunning && !burnRunning && isVideo(mediaUri) && transcriptMatches);
         cancelBurnButton.setEnabled(burnRunning);
-        subtitleSize.setEnabled(!burnRunning);
-        subtitlePosition.setEnabled(!burnRunning);
         subtitleBackground.setEnabled(!burnRunning);
         trackWord.setEnabled(!burnRunning);
         wordScaleSeek.setEnabled(!burnRunning && trackWord.isChecked());
         wordHighlightSeek.setEnabled(!burnRunning && trackWord.isChecked());
+        sizeSeek.setEnabled(!burnRunning);
+        positionSeek.setEnabled(!burnRunning);
+        if (highlightSwatches != null) {
+            for (TextView swatch : highlightSwatches) {
+                swatch.setEnabled(!burnRunning);
+                swatch.setAlpha(burnRunning ? 0.4f : 1f);
+            }
+        }
         saveMp4Button.setEnabled(!burnRunning && SubtitleBurnService.hasRenderFor(this, mediaUri));
     }
 
@@ -737,15 +868,6 @@ public final class MainActivity extends Activity implements
         b.setText(value);
         b.setAllCaps(false);
         return b;
-    }
-
-    private Spinner spinner(String[] values) {
-        Spinner s = new Spinner(this);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this, android.R.layout.simple_spinner_item, values);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        s.setAdapter(adapter);
-        return s;
     }
 
     private LinearLayout.LayoutParams weighted() {

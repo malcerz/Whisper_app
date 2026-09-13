@@ -1,0 +1,8 @@
+Whisper Files v0.5
+- subtitle size is now a percentage slider (2.0-10.0% of the video height) instead of Małe/Średnie/Duże
+- subtitle position is now a percentage slider (0% = top, 100% = bottom) instead of Dół/Środek/Góra
+- new highlight colour picker for the currently spoken word (yellow, orange, red, green, cyan, pink)
+- highlight strength slider still blends the chosen colour with white
+- old Małe/Średnie/Duże and Dół/Środek/Góra settings are migrated to the equivalent percentages
+- the subtitle editor, the live preview and the Media3 burn keep using the same SubtitlePainter and SubtitleLayoutEngine
+- subtitle block is clamped so it never leaves the video frame at any size/position combination

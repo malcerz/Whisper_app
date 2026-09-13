@@ -26,9 +26,9 @@ final class SubtitlePainter {
         background.setColor(Color.argb(120, 0, 0, 0));
     }
 
-    void draw(Canvas canvas, SubtitleCue cue, long timeMs, int width, int height, int position,
-              float baseTextPx, boolean drawBackground, boolean trackWord,
-              float activeScale, int highlightStrength) {
+    void draw(Canvas canvas, SubtitleCue cue, long timeMs, int width, int height,
+              float positionFraction, float baseTextPx, boolean drawBackground, boolean trackWord,
+              float activeScale, int highlightStrength, int highlightColor) {
         if (cue == null || cue.text.isEmpty() || width <= 0 || height <= 0) return;
         float safeWidth = width * SubtitleLayoutEngine.SAFE_WIDTH_FRACTION;
         float scale = trackWord ? Math.max(1f, Math.min(1.6f, activeScale)) : 1f;
@@ -44,14 +44,15 @@ final class SubtitlePainter {
         int wordCount = cue.words.size();
         int firstCount = cue.firstLineCount > 0 ? cue.firstLineCount : wordCount;
         if (wordCount == 0) {
-            drawFallbackText(canvas, cue.text, width, height, position, baseTextPx, drawBackground, safeWidth);
+            drawFallbackText(canvas, cue.text, width, height, positionFraction, baseTextPx,
+                    drawBackground, safeWidth);
             return;
         }
 
         int lineCount = firstCount < wordCount ? 2 : 1;
         float lineHeight = fontHeight(baseTextPx) * 1.06f;
         float totalHeight = lineHeight * lineCount;
-        float centerY = centerY(height, totalHeight, position);
+        float centerY = centerY(height, totalHeight, positionFraction);
         float lineCenterFirst = centerY - totalHeight / 2f + lineHeight / 2f;
 
         float width1 = lineWidth(cue.words, 0, firstCount - 1, baseTextPx, scale);
@@ -68,7 +69,7 @@ final class SubtitlePainter {
                 ? lineWidth(cue.words, firstCount, wordCount - 1, actualBase, actualScale) : 0f;
         lineHeight = fontHeight(actualBase) * 1.06f;
         totalHeight = lineHeight * lineCount;
-        centerY = centerY(height, totalHeight, position);
+        centerY = centerY(height, totalHeight, positionFraction);
         lineCenterFirst = centerY - totalHeight / 2f + lineHeight / 2f;
 
         if (drawBackground) {
@@ -89,16 +90,17 @@ final class SubtitlePainter {
         }
 
         drawWordLine(canvas, cue.words, 0, firstCount - 1, active, width / 2f,
-                lineCenterFirst, actualBase, actualScale, highlightStrength);
+                lineCenterFirst, actualBase, actualScale, highlightStrength, highlightColor);
         if (firstCount < wordCount) {
             drawWordLine(canvas, cue.words, firstCount, wordCount - 1, active, width / 2f,
-                    lineCenterFirst + lineHeight, actualBase, actualScale, highlightStrength);
+                    lineCenterFirst + lineHeight, actualBase, actualScale, highlightStrength,
+                    highlightColor);
         }
     }
 
     private void drawWordLine(Canvas canvas, List<SubtitleWord> words, int from, int to, int active,
                               float centerX, float lineCenterY, float baseTextPx, float activeScale,
-                              int highlightStrength) {
+                              int highlightStrength, int highlightColor) {
         if (from > to) return;
         float total = lineWidth(words, from, to, baseTextPx, activeScale);
         float x = centerX - total / 2f;
@@ -116,7 +118,7 @@ final class SubtitlePainter {
             float drawX = slotCenter - drawWidth / 2f;
             float baseline = baselineForVerticalCenter(size, lineCenterY);
             drawStyledWord(canvas, text, drawX, baseline, size,
-                    isActive ? activeColor(highlightStrength) : Color.WHITE);
+                    isActive ? activeColor(highlightStrength, highlightColor) : Color.WHITE);
             x += slotWidth;
             if (i < to) x += space;
         }
@@ -158,19 +160,27 @@ final class SubtitlePainter {
         return -1;
     }
 
-    private int activeColor(int strength) {
+    private int activeColor(int strength, int highlightColor) {
         float t = Math.max(0, Math.min(100, strength)) / 100f;
-        int r = 255;
-        int g = Math.round(255 + (205 - 255) * t);
-        int b = Math.round(255 + (45 - 255) * t);
+        int r = Math.round(255 + (Color.red(highlightColor) - 255) * t);
+        int g = Math.round(255 + (Color.green(highlightColor) - 255) * t);
+        int b = Math.round(255 + (Color.blue(highlightColor) - 255) * t);
         return Color.rgb(r, g, b);
     }
 
-    private float centerY(int height, float totalHeight, int position) {
-        float margin = height * 0.055f;
-        if (position == SubtitleCanvasOverlay.POSITION_TOP) return margin + totalHeight / 2f;
-        if (position == SubtitleCanvasOverlay.POSITION_CENTER) return height / 2f;
-        return height - margin - totalHeight / 2f;
+    /**
+     * Vertical centre of the subtitle block for a position given as a fraction of the
+     * frame height (0 = top, 1 = bottom). The block is clamped so it always stays
+     * inside the video frame.
+     */
+    private float centerY(int height, float totalHeight, float positionFraction) {
+        float half = totalHeight / 2f;
+        float margin = height * 0.02f;
+        float min = margin + half;
+        float max = height - margin - half;
+        if (min >= max) return height / 2f;
+        float target = height * Math.max(0f, Math.min(1f, positionFraction));
+        return Math.max(min, Math.min(max, target));
     }
 
     private float fontHeight(float px) {
@@ -185,8 +195,9 @@ final class SubtitlePainter {
         return lineCenterY - (fm.ascent + fm.descent) / 2f;
     }
 
-    private void drawFallbackText(Canvas canvas, String text, int width, int height, int position,
-                                  float baseTextPx, boolean drawBackground, float safeWidth) {
+    private void drawFallbackText(Canvas canvas, String text, int width, int height,
+                                  float positionFraction, float baseTextPx, boolean drawBackground,
+                                  float safeWidth) {
         fill.setTextSize(baseTextPx);
         stroke.setTextSize(baseTextPx);
         String[] lines = text.split("\\n", 2);
@@ -199,7 +210,7 @@ final class SubtitlePainter {
         Paint.FontMetrics fm = fill.getFontMetrics();
         float lineHeight = (fm.descent - fm.ascent) * 1.06f;
         float totalHeight = lineHeight * lines.length;
-        float centerY = centerY(height, totalHeight, position);
+        float centerY = centerY(height, totalHeight, positionFraction);
         float baseline = centerY - totalHeight / 2f - fm.ascent;
         if (drawBackground) {
             max = 0f;

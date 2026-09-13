@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $PinnedCommit = "52a939a2a762224e255d366c1182b2af4dd1a032"
+$Version = "0.5.0"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Whisper = Join-Path $Root "whisper.cpp"
 $AndroidProject = Join-Path $Whisper "examples\whisper.android.java"
@@ -8,7 +9,7 @@ $Overlay = Join-Path $Root "overlay"
 $RootPatches = Join-Path $Root "root-patches"
 $Out = Join-Path $Root "out"
 
-Write-Host "=== Whisper Files Android v0.3 build ===" -ForegroundColor Cyan
+Write-Host "=== Whisper Files Android v$Version build ===" -ForegroundColor Cyan
 Write-Host "whisper.cpp commit: $PinnedCommit"
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -41,7 +42,7 @@ if (-not (Test-Path $AndroidProject)) {
     throw "Brak oficjalnego projektu Android w whisper.cpp."
 }
 
-Write-Host "Nakładanie Whisper Files v0.3..."
+Write-Host "Nakładanie Whisper Files v$Version..."
 $JavaDir = Join-Path $AndroidProject "app\src\main\java"
 if (Test-Path $JavaDir) { Remove-Item $JavaDir -Recurse -Force }
 New-Item $JavaDir -ItemType Directory -Force | Out-Null
@@ -94,20 +95,24 @@ if (-not (Test-Path $Ndk)) {
     if ($LASTEXITCODE -ne 0) { throw "Nie udało się zainstalować NDK 25.2.9519653." }
 }
 
-Write-Host "Budowanie release APK (arm64-v8a)..." -ForegroundColor Cyan
+Write-Host "Budowanie APK debug i release (arm64-v8a)..." -ForegroundColor Cyan
 Push-Location $AndroidProject
 try {
-    .\gradlew.bat --no-daemon clean :app:assembleRelease
+    .\gradlew.bat --no-daemon clean :app:assembleDebug :app:assembleRelease
     if ($LASTEXITCODE -ne 0) { throw "Gradle zakończył się kodem $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
 
-$Apk = Join-Path $AndroidProject "app\build\outputs\apk\release\app-release.apk"
-if (-not (Test-Path $Apk)) { throw "Build zakończony, ale nie znaleziono APK: $Apk" }
 New-Item $Out -ItemType Directory -Force | Out-Null
-$Dest = Join-Path $Out "WhisperFiles-v0.3-arm64-release.apk"
-Copy-Item $Apk $Dest -Force
-
-Write-Host ""
-Write-Host "GOTOWE: $Dest" -ForegroundColor Green
+$Variants = @(
+    @{ Name = "debug"; Apk = "app\build\outputs\apk\debug\app-debug.apk" },
+    @{ Name = "release"; Apk = "app\build\outputs\apk\release\app-release.apk" }
+)
+foreach ($Variant in $Variants) {
+    $Apk = Join-Path $AndroidProject $Variant.Apk
+    if (-not (Test-Path $Apk)) { throw "Build zakończony, ale nie znaleziono APK: $Apk" }
+    $Dest = Join-Path $Out "Whisper_app-v$Version-arm64-$($Variant.Name).apk"
+    Copy-Item $Apk $Dest -Force
+    Write-Host "GOTOWE: $Dest" -ForegroundColor Green
+}

@@ -1,4 +1,4 @@
-# Whisper Files Android v0.3
+# Whisper Files Android v0.5
 
 Aplikacja Android oparta na oficjalnym `ggml-org/whisper.cpp`.
 
@@ -16,6 +16,25 @@ Przypięta baza Whisper:
 - wypalanie napisów na stałe do MP4 przez AndroidX Media3 Transformer,
 - brak FFmpeg w APK,
 - render jako foreground service z postępem i anulowaniem.
+
+## Nowości v0.5
+
+### Suwaki rozmiaru i położenia
+
+Zamiast list `Małe / Średnie / Duże` oraz `Dół / Środek / Góra` są teraz dwa suwaki procentowe:
+
+- `Rozmiar napisów`: 2,0–10,0% wysokości obrazu (domyślnie 4,8%),
+- `Położenie napisów`: 0–100% od góry obrazu (domyślnie 88%, czyli dół kadru).
+
+Blok napisów jest dodatkowo pilnowany, żeby przy dowolnej kombinacji rozmiaru i położenia nie wyszedł poza kadr.
+
+Stare ustawienia z v0.4 są migrowane automatycznie do równowartości procentowych, więc nie trzeba niczego ustawiać od nowa.
+
+### Kolor wyróżnienia aktywnego słowa
+
+Obok suwaków `Powiększenie aktywnego słowa` i `Zaznaczenie aktywnego słowa` wybierasz kolor wyróżnienia z sześciu próbek: żółty, pomarańczowy, czerwony, zielony, cyjan i różowy. Suwak zaznaczenia decyduje, jak mocno kolor łączy się z białą czcionką (0% = brak koloru, 100% = pełny kolor).
+
+Podglâd w edytorze i wypalanie do MP4 używają dokładnie tej samej wartości rozmiaru, położenia i koloru (`SubtitleStyle` → `SubtitlePainter`).
 
 ## Nowości v0.3
 
@@ -48,12 +67,14 @@ Aktualnie wypowiadane słowo może być:
 - wyróżnione kolorem,
 - śledzenie można całkowicie wyłączyć.
 
-W głównym ekranie są dwa suwaki:
+W głównym ekranie są suwaki:
 
+- `Rozmiar napisów`: 2,0–10,0% wysokości obrazu,
+- `Położenie napisów`: 0–100% od góry obrazu,
 - `Powiększenie aktywnego słowa`: 100–140%,
-- `Zaznaczenie aktywnego słowa`: 0–100%.
+- `Zaznaczenie aktywnego słowa`: 0–100%,
 
-Domyślnie: 112% powiększenia i 55% zaznaczenia.
+dodatkowo wybór koloru wyróżnienia. Domyślnie: 112% powiększenia i 55% zaznaczenia.
 
 Dla starych transkrypcji z v0.2, które nie mają osi słów, v0.3 potrafi utworzyć przybliżone czasy słów z istniejącego SRT. Najdokładniejsze śledzenie słów wymaga nowej transkrypcji wykonanej przez v0.3.
 
@@ -62,7 +83,7 @@ Dla starych transkrypcji z v0.2, które nie mają osi słów, v0.3 potrafi utwor
 1. Wybierz WAV albo MP4.
 2. Wybierz model `whisper.cpp` `.bin`.
 3. Kliknij `Transkrybuj i utwórz napisy`.
-4. Dla MP4 ustaw rozmiar/pozycję napisów, tło i parametry śledzenia słowa.
+4. Dla MP4 ustaw suwakami rozmiar i pozycję napisów, tło, kolor wyróżnienia i parametry śledzenia słowa.
 5. Kliknij `Edytuj napisy` i popraw błędy transkrypcji.
 6. `Zapisz SRT` generuje SRT ponownie według bieżącego układu filmu.
 7. Kliknij `Wypal napisy do MP4`.
@@ -114,6 +135,6 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 Wynik:
 
-`out\WhisperFiles-v0.3-arm64-release.apk`
+`out\Whisper_app-v0.5.0-arm64-release.apk` (oraz `...-debug.apk`)
 
 APK jest dla `arm64-v8a`.

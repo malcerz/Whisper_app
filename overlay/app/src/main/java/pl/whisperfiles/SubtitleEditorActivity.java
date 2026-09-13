@@ -32,20 +32,22 @@ import java.util.Locale;
 public final class SubtitleEditorActivity extends Activity {
     private static final String TAG = "SubtitleEditor";
     static final String EXTRA_MEDIA_URI = "media_uri";
-    static final String EXTRA_SIZE = "subtitle_size";
-    static final String EXTRA_POSITION = "subtitle_position";
+    static final String EXTRA_SIZE_PERCENT = "subtitle_size_percent";
+    static final String EXTRA_POSITION_PERCENT = "subtitle_position_percent";
     static final String EXTRA_BACKGROUND = "subtitle_background";
     static final String EXTRA_TRACK_WORD = "track_word";
     static final String EXTRA_WORD_SCALE = "word_scale";
     static final String EXTRA_HIGHLIGHT = "word_highlight";
+    static final String EXTRA_HIGHLIGHT_COLOR = "word_highlight_color";
 
     private Uri mediaUri;
-    private int size;
-    private int position;
+    private int sizePercentX10;
+    private int positionPercent;
     private boolean background;
     private boolean trackWord;
     private float wordScale;
     private int highlight;
+    private int highlightColor;
     private VideoInfo videoInfo;
 
     private List<SubtitleWord> words = new ArrayList<>();
@@ -86,12 +88,15 @@ public final class SubtitleEditorActivity extends Activity {
             return;
         }
         mediaUri = Uri.parse(media);
-        size = getIntent().getIntExtra(EXTRA_SIZE, SubtitleBurnService.SIZE_MEDIUM);
-        position = getIntent().getIntExtra(EXTRA_POSITION, SubtitleCanvasOverlay.POSITION_BOTTOM);
+        sizePercentX10 = getIntent().getIntExtra(EXTRA_SIZE_PERCENT, SubtitleStyle.SIZE_X10_DEFAULT);
+        positionPercent = getIntent().getIntExtra(EXTRA_POSITION_PERCENT,
+                SubtitleStyle.POSITION_PERCENT_DEFAULT);
         background = getIntent().getBooleanExtra(EXTRA_BACKGROUND, false);
         trackWord = getIntent().getBooleanExtra(EXTRA_TRACK_WORD, true);
         wordScale = getIntent().getFloatExtra(EXTRA_WORD_SCALE, 1.12f);
         highlight = getIntent().getIntExtra(EXTRA_HIGHLIGHT, 55);
+        highlightColor = getIntent().getIntExtra(EXTRA_HIGHLIGHT_COLOR,
+                SubtitleStyle.defaultHighlightColor());
         videoInfo = VideoInfo.read(this, mediaUri);
 
         try {
@@ -293,7 +298,8 @@ public final class SubtitleEditorActivity extends Activity {
                 rebuildCues(anchor);
                 dirty = false;
             }
-            SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, size, effectiveScale());
+            SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, sizePercentX10,
+                    effectiveScale());
             return true;
         } catch (Exception e) {
             Toast.makeText(this, "Błąd zapisu napisów: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -306,7 +312,8 @@ public final class SubtitleEditorActivity extends Activity {
         try {
             words = SubtitleTimelineStore.replaceRange(
                     words, 0, words.size() - 1, editor.getText().toString());
-            SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, size, effectiveScale());
+            SubtitleProject.saveWordsAndOutputs(this, mediaUri, words, sizePercentX10,
+                    effectiveScale());
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Text-only subtitle save failed", e);
@@ -318,7 +325,7 @@ public final class SubtitleEditorActivity extends Activity {
     private void rebuildCues(long anchorMs) {
         cues = new ArrayList<>(SubtitleLayoutEngine.layout(
                 words, videoInfo.width, videoInfo.height,
-                SubtitleBurnService.relativeSize(size), effectiveScale()));
+                relativeSize(), effectiveScale()));
         refreshVideoCues(cues);
         if (cues.isEmpty()) {
             cueIndex = 0;
@@ -352,8 +359,8 @@ public final class SubtitleEditorActivity extends Activity {
         cueLabel.setText(String.format(Locale.ROOT, "%d / %d   %s – %s",
                 cueIndex + 1, cues.size(), time(cue.startMs), time(cue.endMs)));
         finalLayout.setText(cue.text);
-        preview.setCues(videoInfo, cues, position, SubtitleBurnService.relativeSize(size),
-                background, trackWord, wordScale, highlight);
+        preview.setCues(videoInfo, cues, positionFraction(), relativeSize(),
+                background, trackWord, wordScale, highlight, highlightColor);
         preview.setPlaybackTimeMs(previewTime(cue));
         if (player != null) {
             boolean wasPlaying = player.isPlaying();
@@ -373,12 +380,12 @@ public final class SubtitleEditorActivity extends Activity {
                 words, original.sourceStartIndex, original.sourceEndIndex, text);
         List<SubtitleCue> laidOut = SubtitleLayoutEngine.layout(
                 temporary, videoInfo.width, videoInfo.height,
-                SubtitleBurnService.relativeSize(size), effectiveScale());
+                relativeSize(), effectiveScale());
         if (laidOut.isEmpty()) {
             finalLayout.setText("");
-            preview.setCues(videoInfo, new ArrayList<>(), position,
-                    SubtitleBurnService.relativeSize(size),
-                    background, trackWord, wordScale, highlight);
+            preview.setCues(videoInfo, new ArrayList<>(), positionFraction(),
+                    relativeSize(),
+                    background, trackWord, wordScale, highlight, highlightColor);
             return;
         }
         SubtitleCue first = laidOut.get(0);
@@ -391,17 +398,25 @@ public final class SubtitleEditorActivity extends Activity {
         }
         List<SubtitleCue> previewCues = SubtitleLayoutEngine.layout(
                 previewWords, videoInfo.width, videoInfo.height,
-                SubtitleBurnService.relativeSize(size), effectiveScale());
-        preview.setCues(videoInfo, previewCues, position,
-                SubtitleBurnService.relativeSize(size),
-                background, trackWord, wordScale, highlight);
+                relativeSize(), effectiveScale());
+        preview.setCues(videoInfo, previewCues, positionFraction(),
+                relativeSize(),
+                background, trackWord, wordScale, highlight, highlightColor);
     }
 
     private void refreshVideoCues(List<SubtitleCue> updatedCues) {
         if (preview == null) return;
-        preview.setCues(videoInfo, updatedCues, position,
-                SubtitleBurnService.relativeSize(size), background, trackWord,
-                wordScale, highlight);
+        preview.setCues(videoInfo, updatedCues, positionFraction(),
+                relativeSize(), background, trackWord,
+                wordScale, highlight, highlightColor);
+    }
+
+    private float relativeSize() {
+        return SubtitleStyle.relativeTextSize(sizePercentX10);
+    }
+
+    private float positionFraction() {
+        return SubtitleStyle.positionFraction(positionPercent);
     }
 
     private long previewTime(SubtitleCue cue) {

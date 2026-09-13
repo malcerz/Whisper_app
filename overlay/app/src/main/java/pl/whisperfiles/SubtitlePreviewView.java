@@ -19,12 +19,13 @@ public final class SubtitlePreviewView extends View {
     private VideoInfo videoInfo = new VideoInfo(1080, 1920);
     private SubtitleCue cue;
     private List<SubtitleCue> cues = Collections.emptyList();
-    private int position = SubtitleCanvasOverlay.POSITION_BOTTOM;
-    private float relativeSize = 0.048f;
+    private float positionFraction = SubtitleStyle.positionFraction(SubtitleStyle.POSITION_PERCENT_DEFAULT);
+    private float relativeSize = SubtitleStyle.relativeTextSize(SubtitleStyle.SIZE_X10_DEFAULT);
     private boolean background;
     private boolean trackWord = true;
     private float activeScale = 1.12f;
     private int highlightStrength = 55;
+    private int highlightColor = SubtitleStyle.defaultHighlightColor();
     private long previewTimeMs;
 
     public SubtitlePreviewView(Context context) {
@@ -37,17 +38,19 @@ public final class SubtitlePreviewView extends View {
         setBackgroundColor(Color.TRANSPARENT);
     }
 
-    void setPreview(VideoInfo info, SubtitleCue cue, int position, float relativeSize,
-                    boolean background, boolean trackWord, float activeScale, int highlightStrength) {
+    void setPreview(VideoInfo info, SubtitleCue cue, float positionFraction, float relativeSize,
+                    boolean background, boolean trackWord, float activeScale, int highlightStrength,
+                    int highlightColor) {
         if (info != null) this.videoInfo = info;
         this.cues = Collections.emptyList();
         this.cue = cue;
-        this.position = position;
+        this.positionFraction = positionFraction;
         this.relativeSize = relativeSize;
         this.background = background;
         this.trackWord = trackWord;
         this.activeScale = activeScale;
         this.highlightStrength = highlightStrength;
+        this.highlightColor = highlightColor;
         if (cue != null) {
             if (!cue.words.isEmpty()) {
                 SubtitleWord mid = cue.words.get(cue.words.size() / 2);
@@ -59,17 +62,19 @@ public final class SubtitlePreviewView extends View {
         invalidate();
     }
 
-    void setCues(VideoInfo info, List<SubtitleCue> cues, int position, float relativeSize,
-                 boolean background, boolean trackWord, float activeScale, int highlightStrength) {
+    void setCues(VideoInfo info, List<SubtitleCue> cues, float positionFraction, float relativeSize,
+                 boolean background, boolean trackWord, float activeScale, int highlightStrength,
+                 int highlightColor) {
         if (info != null) this.videoInfo = info;
         this.cues = cues == null ? Collections.emptyList() : cues;
         this.cue = null;
-        this.position = position;
+        this.positionFraction = positionFraction;
         this.relativeSize = relativeSize;
         this.background = background;
         this.trackWord = trackWord;
         this.activeScale = activeScale;
         this.highlightStrength = highlightStrength;
+        this.highlightColor = highlightColor;
         invalidate();
     }
 
@@ -94,9 +99,10 @@ public final class SubtitlePreviewView extends View {
             float dy = (getHeight() - drawH) / 2f;
             canvas.translate(dx, dy);
             canvas.scale(scale, scale);
-            painter.draw(canvas, visibleCue, previewTimeMs, videoInfo.width, videoInfo.height, position,
+            painter.draw(canvas, visibleCue, previewTimeMs, videoInfo.width, videoInfo.height,
+                    positionFraction,
                     SubtitleLayoutEngine.textSizePx(videoInfo.height, relativeSize), background,
-                    trackWord, activeScale, highlightStrength);
+                    trackWord, activeScale, highlightStrength, highlightColor);
         } catch (RuntimeException e) {
             Log.e(TAG, "Subtitle preview rendering failed", e);
         } finally {

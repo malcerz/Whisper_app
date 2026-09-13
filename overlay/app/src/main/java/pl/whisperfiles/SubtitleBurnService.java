@@ -35,16 +35,13 @@ import java.util.List;
 public final class SubtitleBurnService extends Service {
     static final String ACTION_START = "pl.whisperfiles.BURN_START";
     static final String EXTRA_MEDIA_URI = "media_uri";
-    static final String EXTRA_POSITION = "subtitle_position";
-    static final String EXTRA_SIZE = "subtitle_size";
+    static final String EXTRA_POSITION_PERCENT = "subtitle_position_percent";
+    static final String EXTRA_SIZE_PERCENT = "subtitle_size_percent";
     static final String EXTRA_BACKGROUND = "subtitle_background";
     static final String EXTRA_TRACK_WORD = "track_word";
     static final String EXTRA_WORD_SCALE = "word_scale";
     static final String EXTRA_HIGHLIGHT = "word_highlight";
-
-    static final int SIZE_SMALL = 0;
-    static final int SIZE_MEDIUM = 1;
-    static final int SIZE_LARGE = 2;
+    static final String EXTRA_HIGHLIGHT_COLOR = "word_highlight_color";
 
     private static final int NOTIFICATION_ID = 4108;
     private static final String CHANNEL_ID = "whisper_video_export";
@@ -108,15 +105,19 @@ public final class SubtitleBurnService extends Service {
 
         String media = intent.getStringExtra(EXTRA_MEDIA_URI);
         if (media == null) return START_NOT_STICKY;
-        int position = intent.getIntExtra(EXTRA_POSITION, SubtitleCanvasOverlay.POSITION_BOTTOM);
-        int size = intent.getIntExtra(EXTRA_SIZE, SIZE_MEDIUM);
+        int sizePercentX10 = intent.getIntExtra(EXTRA_SIZE_PERCENT, SubtitleStyle.SIZE_X10_DEFAULT);
+        int positionPercent = intent.getIntExtra(EXTRA_POSITION_PERCENT,
+                SubtitleStyle.POSITION_PERCENT_DEFAULT);
         boolean background = intent.getBooleanExtra(EXTRA_BACKGROUND, false);
         boolean trackWord = intent.getBooleanExtra(EXTRA_TRACK_WORD, true);
         float wordScale = intent.getFloatExtra(EXTRA_WORD_SCALE, 1.12f);
         int highlight = intent.getIntExtra(EXTRA_HIGHLIGHT, 55);
+        int highlightColor = intent.getIntExtra(EXTRA_HIGHLIGHT_COLOR,
+                SubtitleStyle.defaultHighlightColor());
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(PREF_LAST_RENDER_MEDIA_URI).apply();
 
-        startBurn(Uri.parse(media), position, size, background, trackWord, wordScale, highlight);
+        startBurn(Uri.parse(media), sizePercentX10, positionPercent, background, trackWord,
+                wordScale, highlight, highlightColor);
         return START_NOT_STICKY;
     }
 
@@ -172,8 +173,9 @@ public final class SubtitleBurnService extends Service {
         return mediaUri.toString().equals(stored) && file.isFile() && file.length() > 0;
     }
 
-    private void startBurn(Uri mediaUri, int position, int size, boolean drawBackground,
-                           boolean trackWord, float wordScale, int highlightStrength) {
+    private void startBurn(Uri mediaUri, int sizePercentX10, int positionPercent,
+                           boolean drawBackground, boolean trackWord, float wordScale,
+                           int highlightStrength, int highlightColor) {
         try {
             List<SubtitleWord> words = SubtitleProject.loadWords(this);
             if (words.isEmpty()) throw new IllegalStateException("Brak osi słów / napisów");
@@ -195,10 +197,11 @@ public final class SubtitleBurnService extends Service {
             startForeground(NOTIFICATION_ID, buildNotification(status, 0, true));
             publish();
 
-            float relativeSize = relativeSize(size);
+            float relativeSize = SubtitleStyle.relativeTextSize(sizePercentX10);
+            float positionFraction = SubtitleStyle.positionFraction(positionPercent);
             SubtitleCanvasOverlay subtitleOverlay = new SubtitleCanvasOverlay(
-                    words, position, relativeSize, drawBackground,
-                    trackWord, wordScale, highlightStrength);
+                    words, positionFraction, relativeSize, drawBackground,
+                    trackWord, wordScale, highlightStrength, highlightColor);
             OverlayEffect overlayEffect = new OverlayEffect(Collections.singletonList(subtitleOverlay));
             Effects effects = new Effects(
                     Collections.emptyList(), Collections.<Effect>singletonList(overlayEffect));
@@ -274,12 +277,6 @@ public final class SubtitleBurnService extends Service {
             if (transformer != null && running) mainHandler.postDelayed(this, 500L);
         }
     };
-
-    static float relativeSize(int size) {
-        if (size == SIZE_SMALL) return 0.038f;
-        if (size == SIZE_LARGE) return 0.060f;
-        return 0.048f;
-    }
 
     private void publish() {
         Listener l = listener;

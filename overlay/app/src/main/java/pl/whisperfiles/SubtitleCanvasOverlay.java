@@ -13,17 +13,14 @@ import java.util.List;
 
 @UnstableApi
 final class SubtitleCanvasOverlay extends CanvasOverlay {
-    static final int POSITION_BOTTOM = 0;
-    static final int POSITION_CENTER = 1;
-    static final int POSITION_TOP = 2;
-
     private final List<SubtitleWord> words;
-    private final int position;
+    private final float positionFraction;
     private final float relativeTextSize;
     private final boolean drawBackground;
     private final boolean trackWord;
     private final float activeScale;
     private final int highlightStrength;
+    private final int highlightColor;
     private final SubtitlePainter painter = new SubtitlePainter();
 
     private List<SubtitleCue> cues = Collections.emptyList();
@@ -32,17 +29,18 @@ final class SubtitleCanvasOverlay extends CanvasOverlay {
     private int lastCueIndex;
     private float baseTextPx;
 
-    SubtitleCanvasOverlay(List<SubtitleWord> words, int position, float relativeTextSize,
+    SubtitleCanvasOverlay(List<SubtitleWord> words, float positionFraction, float relativeTextSize,
                           boolean drawBackground, boolean trackWord, float activeScale,
-                          int highlightStrength) {
+                          int highlightStrength, int highlightColor) {
         super(true);
         this.words = words;
-        this.position = position;
+        this.positionFraction = positionFraction;
         this.relativeTextSize = relativeTextSize;
         this.drawBackground = drawBackground;
         this.trackWord = trackWord;
         this.activeScale = activeScale;
         this.highlightStrength = highlightStrength;
+        this.highlightColor = highlightColor;
     }
 
     @Override
@@ -62,8 +60,8 @@ final class SubtitleCanvasOverlay extends CanvasOverlay {
         long timeMs = presentationTimeUs / 1000L;
         SubtitleCue cue = cueAt(timeMs);
         if (cue == null) return;
-        painter.draw(canvas, cue, timeMs, width, height, position, baseTextPx,
-                drawBackground, trackWord, activeScale, highlightStrength);
+        painter.draw(canvas, cue, timeMs, width, height, positionFraction, baseTextPx,
+                drawBackground, trackWord, activeScale, highlightStrength, highlightColor);
     }
 
     private SubtitleCue cueAt(long timeMs) {

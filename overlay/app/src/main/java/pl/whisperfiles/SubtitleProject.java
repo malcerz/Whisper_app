@@ -29,29 +29,31 @@ final class SubtitleProject {
         return words;
     }
 
-    static List<SubtitleCue> layout(Context context, Uri mediaUri, int size, float activeScale) throws Exception {
+    static List<SubtitleCue> layout(Context context, Uri mediaUri, float relativeTextSize,
+                                    float activeScale) throws Exception {
         List<SubtitleWord> words = loadWords(context);
         VideoInfo info = VideoInfo.read(context, mediaUri);
         return SubtitleLayoutEngine.layout(words, info.width, info.height,
-                SubtitleBurnService.relativeSize(size), activeScale);
+                relativeTextSize, activeScale);
     }
 
     static void saveWordsAndOutputs(Context context, Uri mediaUri, List<SubtitleWord> words,
-                                    int size, float activeScale) throws Exception {
+                                    float relativeTextSize, float activeScale) throws Exception {
         SubtitleTimelineStore.write(context, words);
         VideoInfo info = VideoInfo.read(context, mediaUri);
         List<SubtitleCue> cues = SubtitleLayoutEngine.layout(words, info.width, info.height,
-                SubtitleBurnService.relativeSize(size), activeScale);
+                relativeTextSize, activeScale);
         writeSrt(context, cues);
         writeTxt(context, words);
     }
 
-    static void regenerateOutputs(Context context, Uri mediaUri, int size, float activeScale) throws Exception {
+    static void regenerateOutputs(Context context, Uri mediaUri, float relativeTextSize,
+                                  float activeScale) throws Exception {
         List<SubtitleWord> words = loadWords(context);
         if (words.isEmpty()) return;
         VideoInfo info = VideoInfo.read(context, mediaUri);
         List<SubtitleCue> cues = SubtitleLayoutEngine.layout(words, info.width, info.height,
-                SubtitleBurnService.relativeSize(size), activeScale);
+                relativeTextSize, activeScale);
         writeSrt(context, cues);
         writeTxt(context, words);
     }

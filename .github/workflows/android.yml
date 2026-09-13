@@ -10,6 +10,7 @@ permissions:
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
+  APP_VERSION: v0.5.0
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:
@@ -71,13 +72,13 @@ jobs:
         run: |
           mkdir -p out
           cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk" \
-            out/WhisperFiles-v0.3-arm64-debug.apk
+            "out/Whisper_app-$APP_VERSION-arm64-debug.apk"
           cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk" \
-            out/WhisperFiles-v0.3-arm64-release.apk
+            "out/Whisper_app-$APP_VERSION-arm64-release.apk"
 
       - name: Zapisz APK jako artefakt
         uses: actions/upload-artifact@v4
         with:
-          name: WhisperFiles-v0.3-arm64
+          name: Whisper_app-${{ env.APP_VERSION }}-arm64
           path: out/*.apk
           if-no-files-found: error

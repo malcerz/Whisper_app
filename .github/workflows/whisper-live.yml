@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p whisperlive-unpacked
-          cat whisperlive/src.part1.b64               whisperlive/src.part2.b64               whisperlive/src.part3.b64               whisperlive/src.part4.b64             | base64 --decode             | tar -xzf - -C whisperlive-unpacked
+          cat whisperlive/src.part1.b64 whisperlive/src.part2.b64 whisperlive/src.part3.b64 whisperlive/src.part4.b64 | base64 --decode | tar -xzf - -C whisperlive-unpacked
           test -f whisperlive-unpacked/overlay/app/build.gradle
           test -f whisperlive-unpacked/overlay/app/src/main/java/pl/whisperlive/MainActivity.java
 
@@ -57,12 +57,12 @@ jobs:
       - name: Apply Whisper Live app
         shell: bash
         run: |
-          rm -rf "$ANDROID_PROJECT/app/src/main/java"
-          rm -rf "$ANDROID_PROJECT/app/src/main/jni"
+          rm -rf "$ANDROID_PROJECT/app/src/main"
+          mkdir -p "$ANDROID_PROJECT/app/src/main"
           cp -a whisperlive-unpacked/overlay/app/. "$ANDROID_PROJECT/app/"
           cp whisperlive-unpacked/root-patches/build.gradle "$ANDROID_PROJECT/build.gradle"
           cp whisperlive-unpacked/root-patches/gradle.properties "$ANDROID_PROJECT/gradle.properties"
-          cp whisperlive-unpacked/root-patches/gradle-wrapper.properties             "$ANDROID_PROJECT/gradle/wrapper/gradle-wrapper.properties"
+          cp whisperlive-unpacked/root-patches/gradle-wrapper.properties "$ANDROID_PROJECT/gradle/wrapper/gradle-wrapper.properties"
           SDK_DIR="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           test -n "$SDK_DIR"
           printf 'sdk.dir=%s\n' "$SDK_DIR" > "$ANDROID_PROJECT/local.properties"
@@ -78,8 +78,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"             "out/WhisperLive-$APP_VERSION-arm64-debug.apk"
-          cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk"             "out/WhisperLive-$APP_VERSION-arm64-release.apk"
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk" "out/WhisperLive-$APP_VERSION-arm64-debug.apk"
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk" "out/WhisperLive-$APP_VERSION-arm64-release.apk"
           ls -lh out
 
       - name: Upload APK artifact

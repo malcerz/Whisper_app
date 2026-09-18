@@ -1,0 +1,90 @@
+name: Build Whisper Live APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [whisper-live-build]
+
+permissions:
+  contents: read
+
+env:
+  WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
+  APP_VERSION: v1.0.0
+  ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+
+      - name: Set Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: >-
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+            ndk;25.2.9519653
+            cmake;3.22.1
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Reconstruct Whisper Live sources
+        shell: bash
+        run: |
+          mkdir -p whisperlive-unpacked
+          cat whisperlive/src.part1.b64               whisperlive/src.part2.b64               whisperlive/src.part3.b64               whisperlive/src.part4.b64             | base64 --decode             | tar -xzf - -C whisperlive-unpacked
+          test -f whisperlive-unpacked/overlay/app/build.gradle
+          test -f whisperlive-unpacked/overlay/app/src/main/java/pl/whisperlive/MainActivity.java
+
+      - name: Download pinned whisper.cpp
+        shell: bash
+        run: |
+          git clone https://github.com/ggml-org/whisper.cpp.git whisper.cpp
+          git -C whisper.cpp checkout --detach "$WHISPER_COMMIT"
+
+      - name: Apply Whisper Live app
+        shell: bash
+        run: |
+          rm -rf "$ANDROID_PROJECT/app/src/main/java"
+          rm -rf "$ANDROID_PROJECT/app/src/main/jni"
+          cp -a whisperlive-unpacked/overlay/app/. "$ANDROID_PROJECT/app/"
+          cp whisperlive-unpacked/root-patches/build.gradle "$ANDROID_PROJECT/build.gradle"
+          cp whisperlive-unpacked/root-patches/gradle.properties "$ANDROID_PROJECT/gradle.properties"
+          cp whisperlive-unpacked/root-patches/gradle-wrapper.properties             "$ANDROID_PROJECT/gradle/wrapper/gradle-wrapper.properties"
+          SDK_DIR="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          test -n "$SDK_DIR"
+          printf 'sdk.dir=%s\n' "$SDK_DIR" > "$ANDROID_PROJECT/local.properties"
+          chmod +x "$ANDROID_PROJECT/gradlew"
+
+      - name: Build APK
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT }}
+        run: |
+          ./gradlew --no-daemon clean :app:assembleDebug :app:assembleRelease
+
+      - name: Prepare APK artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"             "out/WhisperLive-$APP_VERSION-arm64-debug.apk"
+          cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk"             "out/WhisperLive-$APP_VERSION-arm64-release.apk"
+          ls -lh out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhisperLive-${{ env.APP_VERSION }}-arm64
+          path: out/*.apk
+          if-no-files-found: error

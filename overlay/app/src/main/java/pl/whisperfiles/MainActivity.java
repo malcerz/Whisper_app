@@ -68,7 +68,8 @@ public final class MainActivity extends Activity implements
     private boolean burnRunning;
 
     private TextView mediaLabel;
-    private TextView modelLabel;\n    private TextView coffeeLink;
+    private TextView modelLabel;
+    private TextView coffeeLink;
     private TextView statusLabel;
     private TextView burnStatusLabel;
     private TextView preview;

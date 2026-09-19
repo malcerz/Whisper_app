@@ -17,6 +17,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -24,12 +25,18 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.ui.PlayerView;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 @UnstableApi
@@ -73,6 +80,12 @@ public final class MainActivity extends Activity implements
     private TextView statusLabel;
     private TextView burnStatusLabel;
     private TextView preview;
+    private TextView videoPreviewHint;
+    private FrameLayout videoPreviewFrame;
+    private PlayerView previewPlayerView;
+    private SubtitlePreviewView videoSubtitlePreview;
+    private ExoPlayer previewPlayer;
+    private Uri previewPlayerUri;
     private ProgressBar progress;
     private ProgressBar burnProgress;
     private Button startButton;
@@ -97,6 +110,19 @@ public final class MainActivity extends Activity implements
     private SeekBar wordHighlightSeek;
     private TextView wordScaleLabel;
     private TextView wordHighlightLabel;
+
+    private final Runnable videoPreviewTicker = new Runnable() {
+        @Override public void run() {
+            if (previewPlayer != null && videoSubtitlePreview != null) {
+                try {
+                    videoSubtitlePreview.setPlaybackTimeMs(previewPlayer.getCurrentPosition());
+                    videoSubtitlePreview.postDelayed(this, 50L);
+                } catch (RuntimeException ignored) {
+                    releaseVideoPreviewPlayer();
+                }
+            }
+        }
+    };
 
     private final ServiceConnection transcriptionConnection = new ServiceConnection() {
         @Override
@@ -138,6 +164,7 @@ public final class MainActivity extends Activity implements
         buildUi();
         restoreSelections();
         updateSelectionLabels();
+        loadSavedTranscriptPreview();
         updateButtons();
     }
 
@@ -148,6 +175,7 @@ public final class MainActivity extends Activity implements
                 transcriptionConnection, Context.BIND_AUTO_CREATE);
         bindService(new Intent(this, SubtitleBurnService.class),
                 burnConnection, Context.BIND_AUTO_CREATE);
+        if (videoPreviewFrame != null) videoPreviewFrame.post(this::refreshVideoPreview);
     }
 
     @Override
@@ -164,6 +192,7 @@ public final class MainActivity extends Activity implements
         burnBound = false;
         transcriptionService = null;
         burnService = null;
+        releaseVideoPreviewPlayer();
         super.onStop();
     }
 
@@ -232,10 +261,6 @@ public final class MainActivity extends Activity implements
         editTranscriptButton.setOnClickListener(v -> openTranscriptEditor());
         root.addView(editTranscriptButton);
 
-        editSubtitlesButton = button("Podgląd i edycja napisów filmu");
-        editSubtitlesButton.setOnClickListener(v -> openSubtitleEditor());
-        root.addView(editSubtitlesButton);
-
         TextView videoTitle = text("Film z wypalonymi napisami", 19, true);
         videoTitle.setPadding(0, dp(22), 0, dp(4));
         root.addView(videoTitle);
@@ -290,6 +315,7 @@ public final class MainActivity extends Activity implements
         SeekBar.OnSeekBarChangeListener styleListener = new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 updateStyleLabels();
+                refreshVideoPreview();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) { saveSubtitleStyle(); }
@@ -298,7 +324,11 @@ public final class MainActivity extends Activity implements
         positionSeek.setOnSeekBarChangeListener(styleListener);
         wordScaleSeek.setOnSeekBarChangeListener(styleListener);
         wordHighlightSeek.setOnSeekBarChangeListener(styleListener);
-        trackWord.setOnCheckedChangeListener((buttonView, isChecked) -> updateStyleLabels());
+        trackWord.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            updateStyleLabels();
+            refreshVideoPreview();
+        });
+        subtitleBackground.setOnCheckedChangeListener((buttonView, isChecked) -> refreshVideoPreview());
 
         burnButton = button("Wypal napisy do MP4");
         burnButton.setOnClickListener(v -> startBurn());
@@ -328,12 +358,44 @@ public final class MainActivity extends Activity implements
         coffeeLink.setPadding(0, dp(6), 0, dp(10));
         root.addView(coffeeLink);
 
-        TextView resultTitle = text("Podgląd transkrypcji", 18, true);
+        TextView resultTitle = text("Podgląd filmu z napisami", 18, true);
         resultTitle.setPadding(0, dp(18), 0, dp(6));
         root.addView(resultTitle);
+
+        videoPreviewHint = text("Po wykonaniu transkrypcji tutaj pojawi się film z aktualnymi napisami.", 14, false);
+        videoPreviewHint.setPadding(0, 0, 0, dp(8));
+        root.addView(videoPreviewHint);
+
+        videoPreviewFrame = new FrameLayout(this);
+        videoPreviewFrame.setBackgroundColor(Color.rgb(20, 20, 20));
+        try {
+            getLayoutInflater().inflate(R.layout.video_preview, videoPreviewFrame, true);
+            previewPlayerView = videoPreviewFrame.findViewById(R.id.videoPlayer);
+            videoSubtitlePreview = videoPreviewFrame.findViewById(R.id.videoSubtitleOverlay);
+            if (previewPlayerView != null && previewPlayerView.getSubtitleView() != null) {
+                previewPlayerView.getSubtitleView().setVisibility(View.GONE);
+            }
+        } catch (RuntimeException e) {
+            previewPlayerView = null;
+            videoPreviewFrame.removeAllViews();
+            videoSubtitlePreview = new SubtitlePreviewView(this);
+            videoPreviewFrame.addView(videoSubtitlePreview, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        }
+        videoPreviewFrame.setVisibility(View.GONE);
+        root.addView(videoPreviewFrame, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(390)));
+
+        editSubtitlesButton = button("Edytuj napisy");
+        editSubtitlesButton.setOnClickListener(v -> openSubtitleEditor());
+        root.addView(editSubtitlesButton);
+
+        TextView transcriptTitle = text("Tekst transkrypcji", 16, true);
+        transcriptTitle.setPadding(0, dp(14), 0, dp(4));
+        root.addView(transcriptTitle);
         preview = text("", 15, false);
         preview.setTextIsSelectable(true);
-        preview.setPadding(dp(10), dp(10), dp(10), dp(24));
+        preview.setPadding(dp(10), dp(8), dp(10), dp(24));
         root.addView(preview, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -460,6 +522,7 @@ public final class MainActivity extends Activity implements
                     File edited = new File(getFilesDir(), "last_transcript.txt");
                     if (edited.isFile()) preview.setText(readSmallText(edited));
                 } catch (Exception ignored) {}
+                refreshVideoPreview();
                 updateButtons();
             }
             return;
@@ -478,6 +541,8 @@ public final class MainActivity extends Activity implements
                 prefs.edit().putString(PREF_MODEL, uri.toString()).apply();
             }
             updateSelectionLabels();
+            loadSavedTranscriptPreview();
+            refreshVideoPreview();
             updateButtons();
             return;
         }
@@ -685,6 +750,7 @@ public final class MainActivity extends Activity implements
         highlightColorIndex = index;
         refreshHighlightSwatches();
         saveSubtitleStyle();
+        refreshVideoPreview();
     }
 
     private void refreshHighlightSwatches() {
@@ -717,6 +783,73 @@ public final class MainActivity extends Activity implements
             if (n <= 0) return "";
             return new String(data, 0, n, java.nio.charset.StandardCharsets.UTF_8);
         }
+    }
+
+    private void loadSavedTranscriptPreview() {
+        if (preview == null || mediaUri == null || !TranscriptionService.hasTranscriptFor(this, mediaUri)) return;
+        File txt = new File(getFilesDir(), "last_transcript.txt");
+        if (!txt.isFile() || txt.length() == 0) return;
+        try {
+            preview.setText(readSmallText(txt));
+        } catch (IOException ignored) {}
+    }
+
+    private void refreshVideoPreview() {
+        if (videoPreviewFrame == null || videoSubtitlePreview == null || mediaUri == null ||
+                !isVideo(mediaUri) || !TranscriptionService.hasTranscriptFor(this, mediaUri)) {
+            if (videoPreviewFrame != null) videoPreviewFrame.setVisibility(View.GONE);
+            if (videoPreviewHint != null) videoPreviewHint.setVisibility(View.VISIBLE);
+            releaseVideoPreviewPlayer();
+            return;
+        }
+        try {
+            VideoInfo info = VideoInfo.read(this, mediaUri);
+            List<SubtitleWord> words = new ArrayList<>(SubtitleProject.loadWords(this));
+            List<SubtitleCue> cues = SubtitleLayoutEngine.layout(
+                    words, info.width, info.height, currentRelativeSize(), effectiveWordScale());
+            videoSubtitlePreview.setCues(
+                    info, cues, SubtitleStyle.positionFraction(currentPositionPercent()),
+                    currentRelativeSize(), subtitleBackground.isChecked(), trackWord.isChecked(),
+                    currentWordScale(), wordHighlightSeek.getProgress(), currentHighlightColor());
+            videoPreviewFrame.setVisibility(View.VISIBLE);
+            videoPreviewHint.setVisibility(View.GONE);
+
+            if (previewPlayerView != null &&
+                    (previewPlayer == null || previewPlayerUri == null || !previewPlayerUri.equals(mediaUri))) {
+                releaseVideoPreviewPlayer();
+                previewPlayer = new ExoPlayer.Builder(getApplicationContext()).build();
+                previewPlayer.setTrackSelectionParameters(previewPlayer.getTrackSelectionParameters()
+                        .buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+                previewPlayer.setMediaItem(MediaItem.fromUri(mediaUri));
+                previewPlayer.prepare();
+                previewPlayerView.setPlayer(previewPlayer);
+                previewPlayerUri = mediaUri;
+                videoSubtitlePreview.removeCallbacks(videoPreviewTicker);
+                videoSubtitlePreview.post(videoPreviewTicker);
+            }
+            if (previewPlayer != null) {
+                videoSubtitlePreview.setPlaybackTimeMs(previewPlayer.getCurrentPosition());
+            } else if (!cues.isEmpty()) {
+                videoSubtitlePreview.setPlaybackTimeMs(cues.get(0).startMs);
+            }
+        } catch (Exception e) {
+            if (videoPreviewHint != null) {
+                videoPreviewHint.setText("Nie można uruchomić podglądu filmu: " + e.getMessage());
+                videoPreviewHint.setVisibility(View.VISIBLE);
+            }
+            if (videoPreviewFrame != null) videoPreviewFrame.setVisibility(View.GONE);
+            releaseVideoPreviewPlayer();
+        }
+    }
+
+    private void releaseVideoPreviewPlayer() {
+        if (videoSubtitlePreview != null) videoSubtitlePreview.removeCallbacks(videoPreviewTicker);
+        if (previewPlayerView != null) previewPlayerView.setPlayer(null);
+        if (previewPlayer != null) {
+            try { previewPlayer.release(); } catch (RuntimeException ignored) {}
+        }
+        previewPlayer = null;
+        previewPlayerUri = null;
     }
 
     private void updateSelectionLabels() {
@@ -786,6 +919,7 @@ public final class MainActivity extends Activity implements
             statusLabel.setText(status);
             progress.setProgress(snapshot.progress);
             preview.setText(snapshot.preview == null ? "" : snapshot.preview);
+            if (snapshot.finished) refreshVideoPreview();
             updateButtons();
         });
     }

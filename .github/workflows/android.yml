@@ -10,7 +10,7 @@ permissions:
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
-  APP_VERSION: v0.5.2
+  APP_VERSION: v0.5.3
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:
@@ -72,13 +72,24 @@ jobs:
         run: |
           mkdir -p out
           cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk" \
-            "out/Whisper_app-$APP_VERSION-arm64-debug.apk"
+            "out/WhisperCaptions-$APP_VERSION-arm64-debug.apk"
           cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk" \
-            "out/Whisper_app-$APP_VERSION-arm64-release.apk"
+            "out/WhisperCaptions-$APP_VERSION-arm64-release.apk"
 
       - name: Zapisz APK jako artefakt
         uses: actions/upload-artifact@v4
         with:
-          name: Whisper_app-${{ env.APP_VERSION }}-arm64
+          name: WhisperCaptions-${{ env.APP_VERSION }}-arm64
           path: out/*.apk
           if-no-files-found: error
+
+      - name: Utwórz GitHub Release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$APP_VERSION" \
+            "out/WhisperCaptions-$APP_VERSION-arm64-release.apk" \
+            --title "Whisper Captions $APP_VERSION" \
+            --notes "Whisper Captions $APP_VERSION: nowa ikona aplikacji, link do modeli Whisper oraz link Kup Kawę pojawiający się po zapisaniu filmu."

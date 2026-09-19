@@ -68,7 +68,7 @@ public final class MainActivity extends Activity implements
     private boolean burnRunning;
 
     private TextView mediaLabel;
-    private TextView modelLabel;
+    private TextView modelLabel;\n    private TextView coffeeLink;
     private TextView statusLabel;
     private TextView burnStatusLabel;
     private TextView preview;
@@ -175,7 +175,7 @@ public final class MainActivity extends Activity implements
         scroll.addView(root, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
 
-        root.addView(text("Whisper Files", 28, true));
+        root.addView(text("Whisper Captions", 28, true));
         TextView subtitle = text("Offline: WAV + MP4 → transkrypcja PL + napisy do filmu.", 15, false);
         subtitle.setPadding(0, dp(4), 0, dp(18));
         root.addView(subtitle);
@@ -186,6 +186,10 @@ public final class MainActivity extends Activity implements
         mediaLabel = text("Nie wybrano pliku", 14, false);
         mediaLabel.setPadding(0, dp(5), 0, dp(14));
         root.addView(mediaLabel);
+
+        TextView modelLink = link("Modele Whisper (Hugging Face)", "https://huggingface.co/ggerganov/whisper.cpp/tree/main");
+        modelLink.setPadding(0, dp(2), 0, dp(6));
+        root.addView(modelLink);
 
         Button pickModel = button("Wybierz model Whisper .bin");
         pickModel.setOnClickListener(v -> pickModel());
@@ -317,6 +321,11 @@ public final class MainActivity extends Activity implements
         saveMp4Button = button("Zapisz MP4 z napisami");
         saveMp4Button.setOnClickListener(v -> createMp4Output());
         root.addView(saveMp4Button);
+
+        coffeeLink = link("☕ Kup Kawę", "https://buycoffee.to/malcerz");
+        coffeeLink.setVisibility(View.GONE);
+        coffeeLink.setPadding(0, dp(6), 0, dp(10));
+        root.addView(coffeeLink);
 
         TextView resultTitle = text("Podgląd transkrypcji", 18, true);
         resultTitle.setPadding(0, dp(18), 0, dp(6));
@@ -495,6 +504,7 @@ public final class MainActivity extends Activity implements
                     runOnUiThread(() -> {
                         burnStatusLabel.setText("Film zapisany");
                         Toast.makeText(this, "Zapisano MP4 z napisami", Toast.LENGTH_LONG).show();
+                        if (coffeeLink != null) coffeeLink.setVisibility(View.VISIBLE);
                         updateButtons();
                     });
                 } catch (IOException e) {
@@ -860,6 +870,20 @@ public final class MainActivity extends Activity implements
         v.setText(value);
         v.setTextSize(sp);
         if (bold) v.setTypeface(v.getTypeface(), android.graphics.Typeface.BOLD);
+        return v;
+    }
+
+    private TextView link(String label, String url) {
+        TextView v = text(label, 15, true);
+        v.setTextColor(0xff1565c0);
+        v.setPaintFlags(v.getPaintFlags() | android.graphics.Paint.UNDERLINE_TEXT_FLAG);
+        v.setOnClickListener(view -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (RuntimeException e) {
+                Toast.makeText(this, "Nie można otworzyć linku", Toast.LENGTH_SHORT).show();
+            }
+        });
         return v;
     }
 

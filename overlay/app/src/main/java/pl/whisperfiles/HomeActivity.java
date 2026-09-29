@@ -14,6 +14,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.media3.common.util.UnstableApi;
+
+@UnstableApi
 public final class HomeActivity extends Activity {
     private static final int RECORD_VIDEO = 2001;
     private static final String PREFS = "whisper_captions_2_teleprompter";

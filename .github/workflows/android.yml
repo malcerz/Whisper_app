@@ -1,16 +1,17 @@
-name: Build Android APK
+name: Build Whisper Captions 2 APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [whisper-captions-2]
 
 permissions:
   contents: write
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
-  APP_VERSION: v0.5.4
+  APP_VERSION: v2.0.0
+  RELEASE_TAG: whisper-captions-2-v2.0.0
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:
@@ -72,28 +73,29 @@ jobs:
         run: |
           mkdir -p out
           cp "$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk" \
-            "out/WhisperCaptions-$APP_VERSION-arm64-debug.apk"
+            "out/WhisperCaptions2-$APP_VERSION-arm64-debug.apk"
           cp "$ANDROID_PROJECT/app/build/outputs/apk/release/app-release.apk" \
-            "out/WhisperCaptions-$APP_VERSION-arm64-release.apk"
+            "out/WhisperCaptions2-$APP_VERSION-arm64-release.apk"
 
       - name: Zapisz APK jako artefakt
         uses: actions/upload-artifact@v4
         with:
-          name: WhisperCaptions-${{ env.APP_VERSION }}-arm64
+          name: WhisperCaptions2-${{ env.APP_VERSION }}-arm64
           path: out/*.apk
           if-no-files-found: error
 
       - name: Utwórz GitHub Release
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/whisper-captions-2'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK="out/WhisperCaptions-$APP_VERSION-arm64-release.apk"
-          if gh release view "$APP_VERSION" >/dev/null 2>&1; then
-            gh release upload "$APP_VERSION" "$APK" --clobber
+          APK="out/WhisperCaptions2-$APP_VERSION-arm64-release.apk"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$APK" --clobber
           else
-            gh release create "$APP_VERSION" "$APK" \
-              --title "Whisper Captions $APP_VERSION" \
-              --notes "Whisper Captions $APP_VERSION: nowa ikona aplikacji, link do modeli Whisper oraz link Kup Kawę pojawiający się po zapisaniu filmu."
+            gh release create "$RELEASE_TAG" "$APK" \
+              --target "$GITHUB_SHA" \
+              --title "Whisper Captions 2 $APP_VERSION" \
+              --notes "Równoległa wersja Whisper Captions z teleprompterem sterowanym rozpoznawaniem mowy, nagrywaniem wideo z dźwiękiem do MP4 oraz dotychczasowym generatorem napisów."
           fi

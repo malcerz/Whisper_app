@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- TeleprompterActivity only references shared constants from HomeActivity. HomeActivity is
+         annotated @UnstableApi because it opens the existing Media3-based subtitle UI; the
+         constants themselves are not Media3 APIs. Keep the suppression scoped to this file. -->
+    <issue id="UnsafeOptInUsageError">
+        <ignore path="src/main/java/pl/whisperfiles/TeleprompterActivity.java" />
+    </issue>
+</lint>

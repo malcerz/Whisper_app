@@ -14,8 +14,8 @@ android {
     applicationId "pl.whisperfiles2"
     minSdkVersion 26
     targetSdkVersion 31
-    versionCode 20001
-    versionName "2.0.0"
+    versionCode 20100
+    versionName "2.1.0"
 
     externalNativeBuild {
       cmake {

@@ -10,6 +10,7 @@ import android.view.Gravity;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.NumberPicker;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -19,11 +20,14 @@ import androidx.media3.common.util.UnstableApi;
 @UnstableApi
 public final class HomeActivity extends Activity {
     private static final int RECORD_VIDEO = 2001;
-    private static final String PREFS = "whisper_captions_2_teleprompter";
-    private static final String PREF_SCRIPT = "script";
+    static final String PREFS = "whisper_captions_2_teleprompter";
+    static final String PREF_SCRIPT = "script";
+    static final String PREF_WINDOW_WORDS = "window_words";
+    static final int DEFAULT_WINDOW_WORDS = 10;
 
     private TextView scriptPreview;
     private TextView lastRecording;
+    private NumberPicker wordCountPicker;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -60,8 +64,34 @@ public final class HomeActivity extends Activity {
         topButtons.addView(record, weighted());
         root.addView(topButtons);
 
+        LinearLayout countRow = new LinearLayout(this);
+        countRow.setOrientation(LinearLayout.HORIZONTAL);
+        countRow.setGravity(Gravity.CENTER_VERTICAL);
+        countRow.setPadding(0, dp(10), 0, dp(4));
+
+        TextView countLabel = text("Słów na ekranie", 16, true);
+        countRow.addView(countLabel, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        wordCountPicker = new NumberPicker(this);
+        wordCountPicker.setMinValue(3);
+        wordCountPicker.setMaxValue(30);
+        wordCountPicker.setWrapSelectorWheel(false);
+        wordCountPicker.setValue(getWindowWords());
+        wordCountPicker.setOnValueChangedListener((picker, oldVal, newVal) ->
+                getSharedPreferences(PREFS, MODE_PRIVATE)
+                        .edit().putInt(PREF_WINDOW_WORDS, newVal).apply());
+        countRow.addView(wordCountPicker, new LinearLayout.LayoutParams(dp(92), dp(108)));
+        root.addView(countRow);
+
+        TextView countHint = text(
+                "Teleprompter przesuwa się o jedno słowo i cały czas pokazuje wybraną liczbę kolejnych słów.",
+                13, false);
+        countHint.setPadding(0, 0, 0, dp(8));
+        root.addView(countHint);
+
         TextView teleTitle = text("Tekst telepromptera", 18, true);
-        teleTitle.setPadding(0, dp(16), 0, dp(6));
+        teleTitle.setPadding(0, dp(8), 0, dp(6));
         root.addView(teleTitle);
 
         scriptPreview = text("", 17, false);
@@ -119,8 +149,10 @@ public final class HomeActivity extends Activity {
             editScript();
             return;
         }
+        int windowWords = wordCountPicker == null ? getWindowWords() : wordCountPicker.getValue();
         Intent i = new Intent(this, TeleprompterActivity.class);
         i.putExtra(TeleprompterActivity.EXTRA_SCRIPT, script);
+        i.putExtra(TeleprompterActivity.EXTRA_WINDOW_WORDS, windowWords);
         startActivityForResult(i, RECORD_VIDEO);
     }
 
@@ -138,6 +170,12 @@ public final class HomeActivity extends Activity {
     private String getScript() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         return prefs.getString(PREF_SCRIPT, "");
+    }
+
+    private int getWindowWords() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int value = prefs.getInt(PREF_WINDOW_WORDS, DEFAULT_WINDOW_WORDS);
+        return Math.max(3, Math.min(30, value));
     }
 
     private void refreshScriptPreview() {

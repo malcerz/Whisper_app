@@ -3,15 +3,15 @@ name: Build Whisper Captions 2 APK
 on:
   workflow_dispatch:
   push:
-    branches: [whisper-captions-2]
+    branches: [whisper-captions-2, whisper-captions-2-word-counter]
 
 permissions:
   contents: write
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
-  APP_VERSION: v2.0.0
-  RELEASE_TAG: whisper-captions-2-v2.0.0
+  APP_VERSION: v2.1.0
+  RELEASE_TAG: whisper-captions-2-v2.1.0
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:
@@ -97,5 +97,5 @@ jobs:
             gh release create "$RELEASE_TAG" "$APK" \
               --target "$GITHUB_SHA" \
               --title "Whisper Captions 2 $APP_VERSION" \
-              --notes "Równoległa wersja Whisper Captions z teleprompterem sterowanym rozpoznawaniem mowy, nagrywaniem wideo z dźwiękiem do MP4 oraz dotychczasowym generatorem napisów."
+              --notes "Teleprompter sterowany lekkim lokalnym licznikiem aktywności mowy: nie rozpoznaje treści słów, tylko przesuwa tekst o kolejne słowa. Dodano konfigurowalną liczbę słów na ekranie (3–30) i szybkie przyciski −/+ podczas nagrania."
           fi

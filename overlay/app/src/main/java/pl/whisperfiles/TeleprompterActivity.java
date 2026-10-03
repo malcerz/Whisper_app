@@ -1,19 +1,20 @@
 package pl.whisperfiles;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Process;
 import android.provider.MediaStore;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
 import android.view.Gravity;
-import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -39,33 +40,37 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
 
 public final class TeleprompterActivity extends ComponentActivity {
     public static final String EXTRA_SCRIPT = "teleprompter_script";
+    public static final String EXTRA_WINDOW_WORDS = "teleprompter_window_words";
+
     private static final int REQUEST_PERMISSIONS = 4101;
-    private static final int WINDOW_WORDS = 10;
+    private static final int MIN_WINDOW_WORDS = 3;
+    private static final int MAX_WINDOW_WORDS = 30;
+    private static final int TRACK_SAMPLE_RATE = 16000;
 
     private PreviewView cameraPreview;
     private TextView promptView;
     private TextView statusView;
+    private TextView wordCountView;
     private Button recordButton;
 
     private String[] scriptWords = new String[0];
     private int wordCursor;
-    private int segmentMaxWords;
+    private int windowWords = HomeActivity.DEFAULT_WINDOW_WORDS;
 
     private VideoCapture<Recorder> videoCapture;
     private Recording recording;
     private boolean recordingStarted;
     private boolean stopping;
 
-    private SpeechRecognizer speechRecognizer;
-    private Intent speechIntent;
-    private boolean speechTracking;
-    private final Runnable restartRecognition = this::startListeningSegment;
+    private final WordPulseDetector wordPulseDetector = new WordPulseDetector();
+    private volatile boolean speechTracking;
+    private AudioRecord speechAudioRecord;
+    private Thread speechThread;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -80,6 +85,10 @@ public final class TeleprompterActivity extends ComponentActivity {
             finish();
             return;
         }
+
+        int savedWindow = getSharedPreferences(HomeActivity.PREFS, MODE_PRIVATE)
+                .getInt(HomeActivity.PREF_WINDOW_WORDS, HomeActivity.DEFAULT_WINDOW_WORDS);
+        windowWords = clampWindowWords(getIntent().getIntExtra(EXTRA_WINDOW_WORDS, savedWindow));
 
         buildUi();
         updatePrompt();
@@ -115,18 +124,38 @@ public final class TeleprompterActivity extends ComponentActivity {
         promptView.setOnClickListener(v -> {
             if (recordingStarted) {
                 advanceWords(1);
-                statusView.setText("Ręczne przesunięcie +1");
+                statusView.setText("Nagrywanie • ręczne przesunięcie +1");
             }
         });
         top.addView(promptView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        LinearLayout countRow = new LinearLayout(this);
+        countRow.setOrientation(LinearLayout.HORIZONTAL);
+        countRow.setGravity(Gravity.CENTER);
+        countRow.setPadding(0, dp(8), 0, 0);
+
+        Button minus = smallButton("−");
+        minus.setOnClickListener(v -> setWindowWords(windowWords - 1));
+        countRow.addView(minus, new LinearLayout.LayoutParams(dp(64), dp(48)));
+
+        wordCountView = new TextView(this);
+        wordCountView.setTextColor(0xFFEEEEEE);
+        wordCountView.setTextSize(14);
+        wordCountView.setGravity(Gravity.CENTER);
+        countRow.addView(wordCountView, new LinearLayout.LayoutParams(dp(126), dp(48)));
+
+        Button plus = smallButton("+");
+        plus.setOnClickListener(v -> setWindowWords(windowWords + 1));
+        countRow.addView(plus, new LinearLayout.LayoutParams(dp(64), dp(48)));
+        top.addView(countRow);
+
         statusView = new TextView(this);
         statusView.setTextColor(0xFFDDDDDD);
         statusView.setTextSize(14);
         statusView.setGravity(Gravity.CENTER);
-        statusView.setPadding(0, dp(8), 0, 0);
+        statusView.setPadding(0, dp(6), 0, 0);
         statusView.setText("Przygotowanie kamery…");
         top.addView(statusView);
 
@@ -153,6 +182,33 @@ public final class TeleprompterActivity extends ComponentActivity {
         root.addView(recordButton, recordParams);
 
         setContentView(root);
+        updateWordCountLabel();
+    }
+
+    private Button smallButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextSize(20);
+        return button;
+    }
+
+    private void setWindowWords(int value) {
+        int next = clampWindowWords(value);
+        if (next == windowWords) return;
+        windowWords = next;
+        getSharedPreferences(HomeActivity.PREFS, MODE_PRIVATE)
+                .edit().putInt(HomeActivity.PREF_WINDOW_WORDS, windowWords).apply();
+        updateWordCountLabel();
+        updatePrompt();
+    }
+
+    private void updateWordCountLabel() {
+        if (wordCountView != null) wordCountView.setText(windowWords + " słów");
+    }
+
+    private static int clampWindowWords(int value) {
+        return Math.max(MIN_WINDOW_WORDS, Math.min(MAX_WINDOW_WORDS, value));
     }
 
     private void startCamera() {
@@ -229,7 +285,7 @@ public final class TeleprompterActivity extends ComponentActivity {
             recordButton.setEnabled(true);
             recordButton.setText("■ STOP I ZAPISZ MP4");
             wordCursor = 0;
-            segmentMaxWords = 0;
+            wordPulseDetector.reset();
             updatePrompt();
             startSpeechTracking();
             return;
@@ -278,94 +334,117 @@ public final class TeleprompterActivity extends ComponentActivity {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private void startSpeechTracking() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            statusView.setText("Nagrywanie • rozpoznawanie mowy niedostępne; dotknij tekstu, aby przesuwać ręcznie");
+        stopSpeechTracking();
+        if (!hasRequiredPermissions() || !recordingStarted || stopping) return;
+
+        int minBytes = AudioRecord.getMinBufferSize(
+                TRACK_SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT);
+        if (minBytes <= 0) minBytes = 4096;
+        int bufferBytes = Math.max(4096, minBytes * 2);
+
+        AudioRecord audio = createTrackingAudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, bufferBytes);
+        if (audio == null) audio = createTrackingAudioRecord(MediaRecorder.AudioSource.MIC, bufferBytes);
+        if (audio == null) {
+            statusView.setText("Nagrywanie • licznik mowy niedostępny; dotknij tekstu, aby przesuwać ręcznie");
             return;
         }
+
         try {
-            if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
-                speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this);
-            } else {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            audio.startRecording();
+            if (audio.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                throw new IllegalStateException("mikrofon nie wystartował");
             }
-            speechRecognizer.setRecognitionListener(new RecognitionListener() {
-                @Override public void onReadyForSpeech(Bundle params) {
-                    statusView.setText("Nagrywanie • teleprompter śledzi tempo mowy");
-                }
-                @Override public void onBeginningOfSpeech() {}
-                @Override public void onRmsChanged(float rmsdB) {}
-                @Override public void onBufferReceived(byte[] buffer) {}
-                @Override public void onEndOfSpeech() {}
-                @Override public void onError(int error) {
-                    if (!speechTracking || !recordingStarted || stopping) return;
-                    statusView.setText("Nagrywanie • ponawiam rozpoznawanie mowy…");
-                    scheduleRecognitionRestart(error == SpeechRecognizer.ERROR_AUDIO ? 900L : 300L);
-                }
-                @Override public void onResults(Bundle results) {
-                    consumeRecognition(results);
-                    if (speechTracking && recordingStarted && !stopping) scheduleRecognitionRestart(150L);
-                }
-                @Override public void onPartialResults(Bundle partialResults) {
-                    consumeRecognition(partialResults);
-                }
-                @Override public void onEvent(int eventType, Bundle params) {}
-            });
-
-            speechIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            speechIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pl-PL");
-            speechIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            speechIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-            speechIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
-            speechTracking = true;
-            startListeningSegment();
         } catch (RuntimeException e) {
-            statusView.setText("Nagrywanie • brak śledzenia mowy; dotknij tekstu, aby przesuwać ręcznie");
-            stopSpeechTracking();
+            try { audio.release(); } catch (RuntimeException ignored) {}
+            statusView.setText("Nagrywanie • licznik mowy nie dostał mikrofonu; dotknij tekstu, aby przesuwać ręcznie");
+            return;
         }
+
+        speechAudioRecord = audio;
+        speechTracking = true;
+        wordPulseDetector.reset();
+        statusView.setText("Nagrywanie • licznik mowy aktywny (treść słów jest ignorowana)");
+
+        AudioRecord loopAudio = audio;
+        speechThread = new Thread(() -> runSpeechLoop(loopAudio), "teleprompter-word-counter");
+        speechThread.start();
     }
 
-    private void startListeningSegment() {
-        if (!speechTracking || speechRecognizer == null || speechIntent == null ||
-                !recordingStarted || stopping) return;
-        segmentMaxWords = 0;
+    @SuppressLint("MissingPermission")
+    private AudioRecord createTrackingAudioRecord(int source, int bufferBytes) {
         try {
-            speechRecognizer.startListening(speechIntent);
+            AudioRecord audio = new AudioRecord(
+                    source,
+                    TRACK_SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferBytes);
+            if (audio.getState() != AudioRecord.STATE_INITIALIZED) {
+                audio.release();
+                return null;
+            }
+            return audio;
         } catch (RuntimeException e) {
-            scheduleRecognitionRestart(700L);
+            return null;
         }
     }
 
-    private void consumeRecognition(Bundle bundle) {
-        if (bundle == null || !recordingStarted || stopping) return;
-        ArrayList<String> results = bundle.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (results == null || results.isEmpty()) return;
-        int count = splitWords(results.get(0)).length;
-        if (count <= segmentMaxWords) return;
-        int delta = count - segmentMaxWords;
-        segmentMaxWords = count;
-        advanceWords(delta);
-        statusView.setText("Nagrywanie • rozpoznano ok. " + wordCursor + " / " + scriptWords.length + " słów");
-    }
+    private void runSpeechLoop(AudioRecord audio) {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
+        short[] buffer = new short[320]; // 20 ms przy 16 kHz
+        int silentFrames = 0;
 
-    private void scheduleRecognitionRestart(long delayMs) {
-        if (promptView == null) return;
-        promptView.removeCallbacks(restartRecognition);
-        promptView.postDelayed(restartRecognition, delayMs);
+        while (speechTracking && recordingStarted && !stopping && audio == speechAudioRecord) {
+            int read;
+            try {
+                read = audio.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING);
+            } catch (RuntimeException e) {
+                break;
+            }
+            if (read <= 0) {
+                silentFrames++;
+                if (silentFrames > 25) break;
+                continue;
+            }
+            silentFrames = 0;
+
+            int words = wordPulseDetector.accept(buffer, read, TRACK_SAMPLE_RATE);
+            if (words > 0) {
+                int delta = words;
+                runOnUiThread(() -> {
+                    if (!speechTracking || !recordingStarted || stopping) return;
+                    advanceWords(delta);
+                    statusView.setText("Nagrywanie • naliczono ok. " + wordCursor + " / " + scriptWords.length + " słów");
+                });
+            }
+        }
+
+        if (speechTracking && recordingStarted && !stopping) {
+            runOnUiThread(() -> statusView.setText(
+                    "Nagrywanie • licznik mowy stracił mikrofon; dotknij tekstu, aby przesuwać ręcznie"));
+        }
     }
 
     private void stopSpeechTracking() {
         speechTracking = false;
-        if (promptView != null) promptView.removeCallbacks(restartRecognition);
-        if (speechRecognizer != null) {
-            try { speechRecognizer.cancel(); } catch (RuntimeException ignored) {}
-            try { speechRecognizer.destroy(); } catch (RuntimeException ignored) {}
+
+        AudioRecord audio = speechAudioRecord;
+        speechAudioRecord = null;
+        if (audio != null) {
+            try { audio.stop(); } catch (RuntimeException ignored) {}
+            try { audio.release(); } catch (RuntimeException ignored) {}
         }
-        speechRecognizer = null;
-        speechIntent = null;
-        segmentMaxWords = 0;
+
+        Thread thread = speechThread;
+        speechThread = null;
+        if (thread != null && thread != Thread.currentThread()) {
+            try { thread.join(250L); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        wordPulseDetector.reset();
     }
 
     private void advanceWords(int count) {
@@ -380,7 +459,8 @@ public final class TeleprompterActivity extends ComponentActivity {
             promptView.setText("✓ KONIEC TEKSTU");
             return;
         }
-        int end = Math.min(scriptWords.length, wordCursor + WINDOW_WORDS);
+
+        int end = Math.min(scriptWords.length, wordCursor + windowWords);
         StringBuilder shown = new StringBuilder();
         for (int i = wordCursor; i < end; i++) {
             if (shown.length() > 0) shown.append(' ');

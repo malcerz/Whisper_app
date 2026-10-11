@@ -2,6 +2,7 @@ package pl.whisperfiles;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -19,6 +20,8 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -52,6 +55,15 @@ public final class TeleprompterActivity extends ComponentActivity {
     private static final int MAX_WINDOW_WORDS = 30;
     private static final int TRACK_SAMPLE_RATE = 16000;
 
+    private static final String TUNE_PREFS = "teleprompter_tuning";
+    private static final String PREF_START_THRESHOLD = "start_threshold";
+    private static final String PREF_NOISE_RATIO = "noise_ratio_percent";
+    private static final String PREF_RELEASE_PERCENT = "release_percent";
+    private static final String PREF_RELEASE_MS = "release_ms";
+    private static final String PREF_ONSET_MS = "onset_ms";
+    private static final String PREF_MIN_INTERVAL_MS = "min_word_interval_ms";
+    private static final String PREF_CONTINUOUS_MS = "continuous_word_ms";
+
     private PreviewView cameraPreview;
     private TextView promptView;
     private TextView statusView;
@@ -72,6 +84,14 @@ public final class TeleprompterActivity extends ComponentActivity {
     private AudioRecord speechAudioRecord;
     private Thread speechThread;
 
+    private int tuneStartThreshold;
+    private int tuneNoiseRatioPercent;
+    private int tuneReleasePercent;
+    private int tuneReleaseMs;
+    private int tuneOnsetMs;
+    private int tuneMinWordIntervalMs;
+    private int tuneContinuousWordMs;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -89,6 +109,8 @@ public final class TeleprompterActivity extends ComponentActivity {
         int savedWindow = getSharedPreferences(HomeActivity.PREFS, MODE_PRIVATE)
                 .getInt(HomeActivity.PREF_WINDOW_WORDS, HomeActivity.DEFAULT_WINDOW_WORDS);
         windowWords = clampWindowWords(getIntent().getIntExtra(EXTRA_WINDOW_WORDS, savedWindow));
+        loadDetectorTuning();
+        configureDetector();
 
         buildUi();
         updatePrompt();
@@ -151,6 +173,11 @@ public final class TeleprompterActivity extends ComponentActivity {
         countRow.addView(plus, new LinearLayout.LayoutParams(dp(64), dp(48)));
         top.addView(countRow);
 
+        Button options = smallButton("Opcje");
+        options.setOnClickListener(v -> showDetectorOptions());
+        top.addView(options, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48)));
+
         statusView = new TextView(this);
         statusView.setTextColor(0xFFDDDDDD);
         statusView.setTextSize(14);
@@ -183,6 +210,200 @@ public final class TeleprompterActivity extends ComponentActivity {
 
         setContentView(root);
         updateWordCountLabel();
+    }
+
+    private void loadDetectorTuning() {
+        android.content.SharedPreferences prefs = getSharedPreferences(TUNE_PREFS, MODE_PRIVATE);
+        tuneStartThreshold = prefs.getInt(
+                PREF_START_THRESHOLD, WordPulseDetector.DEFAULT_START_THRESHOLD);
+        tuneNoiseRatioPercent = prefs.getInt(
+                PREF_NOISE_RATIO, WordPulseDetector.DEFAULT_NOISE_RATIO_PERCENT);
+        tuneReleasePercent = prefs.getInt(
+                PREF_RELEASE_PERCENT, WordPulseDetector.DEFAULT_RELEASE_PERCENT);
+        tuneReleaseMs = prefs.getInt(
+                PREF_RELEASE_MS, WordPulseDetector.DEFAULT_RELEASE_MS);
+        tuneOnsetMs = prefs.getInt(
+                PREF_ONSET_MS, WordPulseDetector.DEFAULT_ONSET_MS);
+        tuneMinWordIntervalMs = prefs.getInt(
+                PREF_MIN_INTERVAL_MS, WordPulseDetector.DEFAULT_MIN_WORD_INTERVAL_MS);
+        tuneContinuousWordMs = prefs.getInt(
+                PREF_CONTINUOUS_MS, WordPulseDetector.DEFAULT_CONTINUOUS_WORD_MS);
+    }
+
+    private void saveDetectorTuning() {
+        getSharedPreferences(TUNE_PREFS, MODE_PRIVATE).edit()
+                .putInt(PREF_START_THRESHOLD, tuneStartThreshold)
+                .putInt(PREF_NOISE_RATIO, tuneNoiseRatioPercent)
+                .putInt(PREF_RELEASE_PERCENT, tuneReleasePercent)
+                .putInt(PREF_RELEASE_MS, tuneReleaseMs)
+                .putInt(PREF_ONSET_MS, tuneOnsetMs)
+                .putInt(PREF_MIN_INTERVAL_MS, tuneMinWordIntervalMs)
+                .putInt(PREF_CONTINUOUS_MS, tuneContinuousWordMs)
+                .apply();
+    }
+
+    private void configureDetector() {
+        wordPulseDetector.configure(
+                tuneStartThreshold,
+                tuneNoiseRatioPercent,
+                tuneReleasePercent,
+                tuneReleaseMs,
+                tuneOnsetMs,
+                tuneMinWordIntervalMs,
+                tuneContinuousWordMs);
+    }
+
+    private void resetDetectorTuningToDefaults() {
+        tuneStartThreshold = WordPulseDetector.DEFAULT_START_THRESHOLD;
+        tuneNoiseRatioPercent = WordPulseDetector.DEFAULT_NOISE_RATIO_PERCENT;
+        tuneReleasePercent = WordPulseDetector.DEFAULT_RELEASE_PERCENT;
+        tuneReleaseMs = WordPulseDetector.DEFAULT_RELEASE_MS;
+        tuneOnsetMs = WordPulseDetector.DEFAULT_ONSET_MS;
+        tuneMinWordIntervalMs = WordPulseDetector.DEFAULT_MIN_WORD_INTERVAL_MS;
+        tuneContinuousWordMs = WordPulseDetector.DEFAULT_CONTINUOUS_WORD_MS;
+        configureDetector();
+        saveDetectorTuning();
+    }
+
+    private void showDetectorOptions() {
+        final int oldStart = tuneStartThreshold;
+        final int oldNoise = tuneNoiseRatioPercent;
+        final int oldReleasePercent = tuneReleasePercent;
+        final int oldReleaseMs = tuneReleaseMs;
+        final int oldOnset = tuneOnsetMs;
+        final int oldInterval = tuneMinWordIntervalMs;
+        final int oldContinuous = tuneContinuousWordMs;
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(8), dp(18), dp(8));
+        scroll.addView(box);
+
+        TextView help = new TextView(this);
+        help.setText(
+                "Zmiany działają od razu. Podczas testu obserwuj na ekranie „poziom / próg”.\n\n"
+                        + "Próg startu i mnożnik tła sterują czułością. "
+                        + "Próg końca oraz czas ciszy decydują, kiedy można policzyć następne słowo. "
+                        + "Tryb ciągłej mowy jest domyślnie WYŁ.");
+        help.setTextSize(14);
+        help.setPadding(0, 0, 0, dp(8));
+        box.addView(help);
+
+        addTuneSlider(box, "Próg startu (niżej = czulszy)",
+                20, 300, tuneStartThreshold, "", value -> {
+                    tuneStartThreshold = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Mnożnik tła (niżej = czulszy)",
+                100, 300, tuneNoiseRatioPercent, "%", value -> {
+                    tuneNoiseRatioPercent = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Próg końca względem startu",
+                60, 100, tuneReleasePercent, "%", value -> {
+                    tuneReleasePercent = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Cisza potrzebna do następnego słowa",
+                20, 300, tuneReleaseMs, " ms", value -> {
+                    tuneReleaseMs = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Minimalny impuls mowy",
+                20, 200, tuneOnsetMs, " ms", value -> {
+                    tuneOnsetMs = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Minimalny odstęp między krokami",
+                80, 800, tuneMinWordIntervalMs, " ms", value -> {
+                    tuneMinWordIntervalMs = value;
+                    configureDetector();
+                });
+
+        addTuneSlider(box, "Krok przy ciągłej mowie (0 = WYŁ.)",
+                0, 1500, tuneContinuousWordMs, " ms", value -> {
+                    tuneContinuousWordMs = value > 0 && value < 250 ? 250 : value;
+                    configureDetector();
+                });
+
+        new AlertDialog.Builder(this)
+                .setTitle("Opcje detekcji słów")
+                .setView(scroll)
+                .setPositiveButton("Zapisz", (dialog, which) -> {
+                    saveDetectorTuning();
+                    configureDetector();
+                })
+                .setNegativeButton("Anuluj", (dialog, which) -> {
+                    tuneStartThreshold = oldStart;
+                    tuneNoiseRatioPercent = oldNoise;
+                    tuneReleasePercent = oldReleasePercent;
+                    tuneReleaseMs = oldReleaseMs;
+                    tuneOnsetMs = oldOnset;
+                    tuneMinWordIntervalMs = oldInterval;
+                    tuneContinuousWordMs = oldContinuous;
+                    configureDetector();
+                })
+                .setNeutralButton("Domyślne", (dialog, which) -> {
+                    resetDetectorTuningToDefaults();
+                    Toast.makeText(this, "Przywrócono wartości domyślne", Toast.LENGTH_SHORT).show();
+                })
+                .show();
+    }
+
+    private void addTuneSlider(
+            LinearLayout root,
+            String title,
+            int min,
+            int max,
+            int value,
+            String suffix,
+            TuneListener listener) {
+        TextView label = new TextView(this);
+        label.setTextSize(14);
+        label.setPadding(0, dp(8), 0, 0);
+        root.addView(label);
+
+        SeekBar seek = new SeekBar(this);
+        seek.setMax(max - min);
+        int clamped = Math.max(min, Math.min(max, value));
+        seek.setProgress(clamped - min);
+        root.addView(seek, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        java.util.function.IntConsumer update = current -> {
+            String shown;
+            if (title.startsWith("Krok przy ciągłej") && current == 0) {
+                shown = title + ": WYŁ.";
+            } else {
+                shown = title + ": " + current + suffix;
+            }
+            label.setText(shown);
+        };
+        update.accept(clamped);
+
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int current = min + progress;
+                if (title.startsWith("Krok przy ciągłej") && current > 0 && current < 250) {
+                    current = 250;
+                }
+                update.accept(current);
+                listener.onChanged(current);
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+    }
+
+    private interface TuneListener {
+        void onChanged(int value);
     }
 
     private Button smallButton(String text) {

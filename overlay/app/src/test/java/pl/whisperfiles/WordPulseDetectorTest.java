@@ -43,6 +43,21 @@ public final class WordPulseDetectorTest {
     }
 
     @Test
+    public void configurationCanReduceSensitivity() {
+        WordPulseDetector detector = new WordPulseDetector();
+        short[] quiet = frame(20);
+        short[] medium = frame(520);
+
+        detector.configure(1200, 155, 95, 60, 20, 140, 0);
+
+        int words = 0;
+        for (int i = 0; i < 12; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
+        for (int i = 0; i < 10; i++) words += detector.accept(medium, medium.length, SAMPLE_RATE);
+
+        assertEquals(0, words);
+    }
+
+    @Test
     public void doesNotCountQuietBackground() {
         WordPulseDetector detector = new WordPulseDetector();
         short[] quiet = frame(24);

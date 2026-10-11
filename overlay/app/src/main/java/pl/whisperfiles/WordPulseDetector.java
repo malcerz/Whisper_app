@@ -9,7 +9,7 @@ package pl.whisperfiles;
 final class WordPulseDetector {
     private static final int CALIBRATION_MS = 160;
     private static final int MIN_ONSET_MS = 20;
-    private static final int RELEASE_MS = 55;
+    private static final int RELEASE_MS = 35;
     private static final int CONTINUOUS_WORD_MS = 430;
 
     private static final double MIN_START_THRESHOLD = 55.0;
@@ -47,7 +47,7 @@ final class WordPulseDetector {
         // Peak pomaga przy cichych spółgłoskach, ale RMS nadal dominuje.
         double level = Math.max(rms, peak * 0.28);
         if (envelope == 0.0) envelope = level;
-        else envelope = envelope * 0.45 + level * 0.55;
+        else envelope = envelope * 0.20 + level * 0.80;
 
         int frameMs = Math.max(1, (int) Math.round(length * 1000.0 / sampleRate));
         lastLevel = envelope;

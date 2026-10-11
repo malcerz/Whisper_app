@@ -397,6 +397,7 @@ public final class TeleprompterActivity extends ComponentActivity {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
         short[] buffer = new short[320]; // 20 ms przy 16 kHz
         int silentFrames = 0;
+        long lastMeterUiMs = 0L;
 
         while (speechTracking && recordingStarted && !stopping && audio == speechAudioRecord) {
             int read;
@@ -413,13 +414,27 @@ public final class TeleprompterActivity extends ComponentActivity {
             silentFrames = 0;
 
             int words = wordPulseDetector.accept(buffer, read, TRACK_SAMPLE_RATE);
+            int level = (int) Math.round(wordPulseDetector.getLastLevel());
+            int threshold = (int) Math.round(wordPulseDetector.getLastStartThreshold());
+
             if (words > 0) {
                 int delta = words;
                 runOnUiThread(() -> {
                     if (!speechTracking || !recordingStarted || stopping) return;
                     advanceWords(delta);
-                    statusView.setText("Nagrywanie • naliczono ok. " + wordCursor + " / " + scriptWords.length + " słów");
+                    statusView.setText("Nagrywanie • " + wordCursor + " / " + scriptWords.length
+                            + " słów • poziom " + level + " / próg " + threshold);
                 });
+            } else {
+                long now = android.os.SystemClock.elapsedRealtime();
+                if (now - lastMeterUiMs >= 300L) {
+                    lastMeterUiMs = now;
+                    runOnUiThread(() -> {
+                        if (!speechTracking || !recordingStarted || stopping) return;
+                        statusView.setText("Nagrywanie • " + wordCursor + " / " + scriptWords.length
+                                + " słów • poziom " + level + " / próg " + threshold);
+                    });
+                }
             }
         }
 

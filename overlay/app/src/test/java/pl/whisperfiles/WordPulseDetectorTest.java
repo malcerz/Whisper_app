@@ -19,10 +19,10 @@ public final class WordPulseDetectorTest {
         // Kalibracja + chwila ciszy.
         for (int i = 0; i < 12; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
 
-        // 15 "słów": 120 ms mowy + 100 ms wyraźnej pauzy.
+        // 15 "słów": 120 ms mowy + 60 ms wyraźnej pauzy.
         for (int w = 0; w < 15; w++) {
             for (int i = 0; i < 6; i++) words += detector.accept(speech, speech.length, SAMPLE_RATE);
-            for (int i = 0; i < 5; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
+            for (int i = 0; i < 3; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
         }
 
         assertEquals(15, words);

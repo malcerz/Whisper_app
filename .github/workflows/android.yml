@@ -10,8 +10,8 @@ permissions:
 
 env:
   WHISPER_COMMIT: 52a939a2a762224e255d366c1182b2af4dd1a032
-  APP_VERSION: v2.1.1
-  RELEASE_TAG: whisper-captions-2-v2.1.1
+  APP_VERSION: v2.1.2
+  RELEASE_TAG: whisper-captions-2-v2.1.2
   ANDROID_PROJECT: whisper.cpp/examples/whisper.android.java
 
 jobs:
@@ -97,5 +97,5 @@ jobs:
             gh release create "$RELEASE_TAG" "$APK" \
               --target "$GITHUB_SHA" \
               --title "Whisper Captions 2 $APP_VERSION" \
-              --notes "Poprawiony licznik mowy: znacznie niższy i adaptacyjny próg, krótsza detekcja pauzy oraz podgląd poziomu mikrofonu i progu na żywo. Dodano test regresyjny 15 słów rozdzielonych pauzami."
+              --notes "Licznik telepromptera bez runaway: jedno ciągłe wypowiedzenie daje tylko jeden krok; następne słowo jest liczone dopiero po krótkiej realnej ciszy. Dodano minimalny odstęp między krokami i test 3 sekund ciągłej mowy = 1 krok."
           fi

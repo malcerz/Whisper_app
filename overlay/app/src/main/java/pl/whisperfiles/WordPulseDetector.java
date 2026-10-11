@@ -3,19 +3,17 @@ package pl.whisperfiles;
 /**
  * Lekki licznik aktywności mowy dla telepromptera.
  *
- * Nie rozpoznaje treści. Liczy osobne impulsy mowy rozdzielone krótką ciszą,
- * a przy dłuższej ciągłej wypowiedzi dodaje kolejne kroki w umiarkowanym tempie.
+ * Nie rozpoznaje treści słów. Każdy wyraźny impuls mowy po krótkiej ciszy
+ * przesuwa teleprompter dokładnie o jedno słowo.
  */
 final class WordPulseDetector {
     private static final int CALIBRATION_MS = 160;
     private static final int MIN_ONSET_MS = 20;
-    private static final int RELEASE_MS = 35;
-    private static final int CONTINUOUS_WORD_MS = 430;
+    private static final int RELEASE_MS = 60;
+    private static final int MIN_WORD_INTERVAL_MS = 140;
 
     private static final double MIN_START_THRESHOLD = 55.0;
-    private static final double MIN_RELEASE_THRESHOLD = 42.0;
     private static final double START_NOISE_RATIO = 1.55;
-    private static final double RELEASE_NOISE_RATIO = 1.18;
 
     private double noiseFloor;
     private double envelope;
@@ -25,7 +23,7 @@ final class WordPulseDetector {
     private boolean speaking;
     private int onsetMs;
     private int quietMs;
-    private int voicedMsSinceWord;
+    private int sinceLastWordMs = MIN_WORD_INTERVAL_MS;
 
     private double lastLevel;
     private double lastStartThreshold;
@@ -44,16 +42,14 @@ final class WordPulseDetector {
         }
 
         double rms = Math.sqrt(sum / (double) length);
-        // Peak pomaga przy cichych spółgłoskach, ale RMS nadal dominuje.
         double level = Math.max(rms, peak * 0.28);
         if (envelope == 0.0) envelope = level;
         else envelope = envelope * 0.20 + level * 0.80;
 
         int frameMs = Math.max(1, (int) Math.round(length * 1000.0 / sampleRate));
+        sinceLastWordMs = Math.min(10_000, sinceLastWordMs + frameMs);
         lastLevel = envelope;
 
-        // Krótka kalibracja po starcie nagrania. Bierzemy minimum, a nie średnią,
-        // żeby przypadkowe słowo wypowiedziane od razu nie ustawiło za wysokiego progu.
         if (calibrationMs < CALIBRATION_MS) {
             calibrationMinimum = Math.min(calibrationMinimum, envelope);
             calibrationMs += frameMs;
@@ -61,71 +57,59 @@ final class WordPulseDetector {
                 noiseFloor = Math.max(18.0,
                         calibrationMinimum == Double.MAX_VALUE ? envelope : calibrationMinimum);
             }
-            lastStartThreshold = Math.max(MIN_START_THRESHOLD,
-                    Math.max(18.0, noiseFloor) * START_NOISE_RATIO + 10.0);
+            lastStartThreshold = startThreshold();
             return 0;
         }
 
         if (noiseFloor <= 0.0) noiseFloor = Math.max(18.0, envelope * 0.45);
 
-        double startThreshold = Math.max(
-                MIN_START_THRESHOLD,
-                noiseFloor * START_NOISE_RATIO + 10.0);
-        double releaseThreshold = Math.max(
-                MIN_RELEASE_THRESHOLD,
-                noiseFloor * RELEASE_NOISE_RATIO + 6.0);
+        double startThreshold = startThreshold();
+        // Celowo bardzo mała histereza. Na realnym telefonie drugi strumień mikrofonu
+        // ma niski poziom (np. ok. 51 przy progu 55). Żeby kolejne słowo mogło zostać
+        // ponownie uzbrojone, cisza musi zejść tylko trochę poniżej progu startowego,
+        // ale utrzymać się przez RELEASE_MS.
+        double releaseThreshold = Math.max(40.0, startThreshold * 0.95);
         lastStartThreshold = startThreshold;
-
-        int words = 0;
 
         if (!speaking) {
             if (envelope < startThreshold) {
-                // Gdy robi się ciszej, obniżaj próg dość szybko. Gdy tło rośnie,
-                // podnoś go wolno, żeby nie "uciekał" przed cichą mową.
                 double alpha = envelope < noiseFloor ? 0.14 : 0.025;
                 noiseFloor = noiseFloor * (1.0 - alpha) + envelope * alpha;
                 noiseFloor = clamp(noiseFloor, 12.0, 5000.0);
-                startThreshold = Math.max(
-                        MIN_START_THRESHOLD,
-                        noiseFloor * START_NOISE_RATIO + 10.0);
+                startThreshold = startThreshold();
                 lastStartThreshold = startThreshold;
             }
 
             if (envelope >= startThreshold) {
                 onsetMs += frameMs;
-                if (onsetMs >= MIN_ONSET_MS) {
+                if (onsetMs >= MIN_ONSET_MS && sinceLastWordMs >= MIN_WORD_INTERVAL_MS) {
                     speaking = true;
                     onsetMs = 0;
                     quietMs = 0;
-                    voicedMsSinceWord = 0;
-                    words++;
+                    sinceLastWordMs = 0;
+                    return 1;
                 }
             } else {
                 onsetMs = 0;
             }
-        } else {
-            if (envelope >= releaseThreshold) {
-                quietMs = 0;
-                voicedMsSinceWord += frameMs;
-
-                // Bez rozpoznawania treści nie da się pewnie rozdzielić słów w ciągłej
-                // wypowiedzi. Ten licznik podtrzymuje przesuwanie przy braku pauz.
-                while (voicedMsSinceWord >= CONTINUOUS_WORD_MS) {
-                    voicedMsSinceWord -= CONTINUOUS_WORD_MS;
-                    words++;
-                }
-            } else {
-                quietMs += frameMs;
-                if (quietMs >= RELEASE_MS) {
-                    speaking = false;
-                    quietMs = 0;
-                    onsetMs = 0;
-                    voicedMsSinceWord = 0;
-                }
-            }
+            return 0;
         }
 
-        return words;
+        // Po wykryciu słowa NIE ma już żadnego liczenia "co X ms".
+        // Jedno otwarcie ust / jedna ciągła wypowiedź = maksymalnie jeden krok,
+        // dopóki nie pojawi się rzeczywista krótka cisza.
+        if (envelope < releaseThreshold) {
+            quietMs += frameMs;
+            if (quietMs >= RELEASE_MS) {
+                speaking = false;
+                quietMs = 0;
+                onsetMs = 0;
+            }
+        } else {
+            quietMs = 0;
+        }
+
+        return 0;
     }
 
     double getLastLevel() {
@@ -144,9 +128,15 @@ final class WordPulseDetector {
         speaking = false;
         onsetMs = 0;
         quietMs = 0;
-        voicedMsSinceWord = 0;
+        sinceLastWordMs = MIN_WORD_INTERVAL_MS;
         lastLevel = 0.0;
         lastStartThreshold = 0.0;
+    }
+
+    private double startThreshold() {
+        return Math.max(
+                MIN_START_THRESHOLD,
+                Math.max(18.0, noiseFloor) * START_NOISE_RATIO + 10.0);
     }
 
     private static double clamp(double value, double min, double max) {

@@ -16,16 +16,30 @@ public final class WordPulseDetectorTest {
 
         int words = 0;
 
-        // Kalibracja + chwila ciszy.
         for (int i = 0; i < 12; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
 
-        // 15 "słów": 120 ms mowy + 60 ms wyraźnej pauzy.
+        // 15 słów: 120 ms mowy + 80 ms wyraźnej pauzy.
         for (int w = 0; w < 15; w++) {
             for (int i = 0; i < 6; i++) words += detector.accept(speech, speech.length, SAMPLE_RATE);
-            for (int i = 0; i < 3; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
+            for (int i = 0; i < 4; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
         }
 
         assertEquals(15, words);
+    }
+
+    @Test
+    public void oneLongUtteranceDoesNotRunAway() {
+        WordPulseDetector detector = new WordPulseDetector();
+        short[] quiet = frame(20);
+        short[] speech = frame(520);
+
+        int words = 0;
+        for (int i = 0; i < 12; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
+
+        // 3 sekundy ciągłego dźwięku mają dać jeden krok, nie 5-7.
+        for (int i = 0; i < 150; i++) words += detector.accept(speech, speech.length, SAMPLE_RATE);
+
+        assertEquals(1, words);
     }
 
     @Test

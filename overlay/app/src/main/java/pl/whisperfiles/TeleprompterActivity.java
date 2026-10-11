@@ -291,7 +291,7 @@ public final class TeleprompterActivity extends ComponentActivity {
         box.addView(help);
 
         addTuneSlider(box, "Próg startu (niżej = czulszy)",
-                20, 300, tuneStartThreshold, "", value -> {
+                20, 1000, tuneStartThreshold, "", value -> {
                     tuneStartThreshold = value;
                     configureDetector();
                 });

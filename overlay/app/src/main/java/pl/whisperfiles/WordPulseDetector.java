@@ -45,7 +45,7 @@ final class WordPulseDetector {
             int onsetMs,
             int minWordIntervalMs,
             int continuousWordMs) {
-        this.minStartThreshold = clampInt(startThreshold, 20, 300);
+        this.minStartThreshold = clampInt(startThreshold, 20, 2000);
         this.noiseRatioPercent = clampInt(noiseRatioPercent, 100, 300);
         this.releasePercent = clampInt(releasePercent, 60, 100);
         this.releaseMs = clampInt(releaseMs, 20, 300);

@@ -48,7 +48,7 @@ public final class WordPulseDetectorTest {
         short[] quiet = frame(20);
         short[] medium = frame(520);
 
-        detector.configure(1200, 155, 95, 60, 20, 140, 0);
+        detector.configure(1000, 155, 95, 60, 20, 140, 0);
 
         int words = 0;
         for (int i = 0; i < 12; i++) words += detector.accept(quiet, quiet.length, SAMPLE_RATE);
